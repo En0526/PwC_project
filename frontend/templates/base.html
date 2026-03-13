@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}訂閱網站更新監測{% endblock %}</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header class="site-header">
+        <a href="{{ url_for('pages.dashboard') if current_user.is_authenticated else url_for('auth.login') }}" class="logo">📌 訂閱更新監測</a>
+        {% if current_user.is_authenticated %}
+        <nav>
+            <span class="user-email">{{ current_user.email }}</span>
+            <a href="{{ url_for('auth.logout') }}">登出</a>
+        </nav>
+        {% endif %}
+    </header>
+    <main class="main-content">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+        <ul class="flash-messages">
+            {% for category, msg in messages %}
+            <li class="flash {{ category }}">{{ msg }}</li>
+            {% endfor %}
+        </ul>
+        {% endif %}
+        {% endwith %}
+        {% block content %}{% endblock %}
+    </main>
+</body>
+</html>

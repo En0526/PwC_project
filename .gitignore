@@ -1,0 +1,29 @@
+# 環境與機密
+.env
+venv/
+.venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# 資料庫（若用 SQLite 可選是否納入版控）
+*.db
+*.sqlite3
+site.db
+
+# IDE / 編輯器
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 系統
+.DS_Store
+Thumbs.db

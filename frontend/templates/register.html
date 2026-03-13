@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}註冊 - 訂閱網站更新監測{% endblock %}
+{% block content %}
+<div class="auth-box">
+    <h1>註冊</h1>
+    <form method="post" action="{{ url_for('auth.register') }}">
+        <label>信箱 <input type="email" name="email" required placeholder="you@example.com"></label>
+        <label>密碼（至少 6 碼）<input type="password" name="password" required minlength="6"></label>
+        <button type="submit">註冊</button>
+    </form>
+    <p class="auth-link"><a href="{{ url_for('auth.login') }}">已有帳號？登入</a></p>
+</div>
+{% endblock %}
