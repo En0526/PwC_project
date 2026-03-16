@@ -85,11 +85,11 @@ D:\NTU_AI\
 2. **在 GitHub 建立新倉庫**
    - 登入 [GitHub](https://github.com) → 點右上角 **+** → **New repository**
    - 名稱可填 `NTU_AI` 或自訂，**不要**勾選 "Add a README"（本地已有）
-   - 建立後記下倉庫網址，例如：`https://github.com/En0526/NTU_AI.git`
+   - 建立後記下倉庫網址，例如：`https://github.com/En0526/PwC_project.git`
 
 3. **把本地專案推上去**
    ```bash
-   git remote add origin https://github.com/En0526/NTU_AI.git
+   git remote add origin https://github.com/En0526/PwC_project.git
    git branch -M main
    git push -u origin main
    ```
