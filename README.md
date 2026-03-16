@@ -85,11 +85,11 @@ D:\NTU_AI\
 2. **在 GitHub 建立新倉庫**
    - 登入 [GitHub](https://github.com) → 點右上角 **+** → **New repository**
    - 名稱可填 `NTU_AI` 或自訂，**不要**勾選 "Add a README"（本地已有）
-   - 建立後記下倉庫網址，例如：`https://github.com/你的帳號/NTU_AI.git`
+   - 建立後記下倉庫網址，例如：`https://github.com/En0526/NTU_AI.git`
 
 3. **把本地專案推上去**
    ```bash
-   git remote add origin https://github.com/你的帳號/NTU_AI.git
+   git remote add origin https://github.com/En0526/NTU_AI.git
    git branch -M main
    git push -u origin main
    ```
@@ -98,15 +98,45 @@ D:\NTU_AI\
    - 進該倉庫 → **Settings** → **Collaborators** → **Add people**
    - 輸入同學的 GitHub 帳號，送出邀請；同學接受後即可 push。
 
-### 同學第一次參與
+### 同學第一次參與（協作者要怎麼用）
 
-1. **安裝 Git**（若尚未安裝）：[git-scm.com](https://git-scm.com/)
-2. **複製專案到本機**
+**前提**：專案擁有者（En0526）已經在 GitHub 倉庫的 **Settings → Collaborators** 加你為共同開發者，並且你已在 GitHub 接受邀請。
+
+1. **安裝 Git**（若尚未安裝）：[git-scm.com](https://git-scm.com/)  
+   安裝 Python 3.10+（若尚未安裝）：[python.org](https://www.python.org/)
+
+2. **複製專案到本機**（請用實際倉庫名稱，目前為 `PwC_project`）
    ```bash
-   git clone https://github.com/你的帳號/NTU_AI.git
-   cd NTU_AI
+   git clone https://github.com/En0526/PwC_project.git
+   cd PwC_project
    ```
-3. **依照「安裝與執行」** 建立 venv、裝套件、複製 `.env.example` 成 `.env` 並設定，再執行 `python app.py`。
+
+3. **建環境、裝套件、設定**
+   - **Windows（PowerShell）**：在專案目錄執行  
+     `.\setup_env.ps1`  
+     若沒有該腳本，就手動執行：
+     ```powershell
+   python -m venv venv
+   .\venv\Scripts\activate
+   pip install -r requirements.txt
+   copy .env.example .env
+   ```
+   - **Mac / Linux**：
+     ```bash
+   python3 -m venv venv
+   source venv/bin/activate
+   pip install -r requirements.txt
+   cp .env.example .env
+   ```
+   - 編輯 `.env`，至少設定 `FLASK_SECRET_KEY`（任意隨機字串）。
+
+4. **啟動專案**
+   ```bash
+   python app.py
+   ```
+   瀏覽器開 <http://127.0.0.1:5000> 即可使用。
+
+之後要改程式：先 `git pull` 拉最新 → 改完 → `git add .` → `git commit -m "說明"` → `git push`。
 
 ### 日常共編流程
 
