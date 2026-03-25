@@ -14,7 +14,7 @@ def create_app(config_class=Config):
         __name__,
         template_folder=os.path.join(BASE_DIR, "frontend", "templates"),
         static_folder=os.path.join(BASE_DIR, "frontend", "static"),
-        static_url_path="",
+        static_url_path="/static",
     )
     app.config.from_object(config_class)
     db.init_app(app)

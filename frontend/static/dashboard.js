@@ -119,15 +119,23 @@
         })
             .then(function (r) {
                 if (r.ok || r.status === 201) {
+                    console.log('新增訂閱成功', r.status);
+                    alert('新增訂閱成功！');
                     document.getElementById('sub-url').value = '';
                     document.getElementById('sub-name').value = '';
                     document.getElementById('sub-watch').value = '';
                     loadSubscriptions();
                 } else {
-                    return r.json().then(function (d) { alert(d.error || '新增失敗'); });
+                    return r.json().then(function (d) {
+                        console.error('新增訂閱錯誤', d);
+                        alert('新增失敗: ' + (d.error || '伺服器回應非預期'));
+                    });
                 }
             })
-            .catch(function () { alert('新增失敗'); });
+            .catch(function (err) {
+                console.error('新增訂閱時網路或 JS 錯誤', err);
+                alert('新增失敗：網路或系統錯誤，請開 F12 看 Console');
+            });
     });
 
     loadSubscriptions();
