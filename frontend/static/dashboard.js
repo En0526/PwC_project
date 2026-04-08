@@ -1,8 +1,33 @@
 (function () {
-    const listEl = document.getElementById('sub-list');
-    const form = document.getElementById('form-add-sub');
+    function qs(id) { return document.getElementById(id); }
+    function fmtInterval(mins) {
+        var n = Number(mins || 0);
+        if (!Number.isFinite(n) || n <= 0) return '-';
+        if (n < 60) return n + ' 分';
+        if (n < 60 * 24) {
+            var h = n / 60;
+            return (Number.isInteger(h) ? h : h.toFixed(1)) + ' 小時';
+        }
+        if (n < 60 * 24 * 30) {
+            var d = n / (60 * 24);
+            return (Number.isInteger(d) ? d : d.toFixed(1)) + ' 天';
+        }
+        var m = n / (60 * 24 * 30);
+        return (Number.isInteger(m) ? m : m.toFixed(1)) + ' 月';
+    }
 
-    function loadSubscriptions() {
+    function init() {
+        const listEl = qs('sub-list');
+        const form = qs('form-add-sub');
+        const presetEl = qs('preset-list');
+        const blockedEl = qs('blocked-list');
+
+        if (!listEl || !form) {
+            alert('前端初始化失敗：找不到必要的 DOM（請重新整理頁面）。');
+            return;
+        }
+
+        function loadSubscriptions() {
         fetch('/api/subscriptions', { credentials: 'same-origin' })
             .then(function (r) { return r.json(); })
             .then(function (data) {
@@ -18,8 +43,7 @@
                         '<h3>' + (s.name || '未命名') + '</h3>' +
                         '<div class="url">' + escapeHtml(s.url) + '</div>' +
                         (s.watch_description ? '<div class="meta">關注：' + escapeHtml(s.watch_description.slice(0, 80)) + (s.watch_description.length > 80 ? '…' : '') + '</div>' : '') +
-                        '<div class="meta">檢查頻率：' + (escapeHtml(s.check_interval_label || formatIntervalLabel(s.check_interval_minutes))) + '</div>' +
-                        '<div class="meta">上次檢查：' + lastCheck + '　有變更：' + lastChange + '</div>' +
+                        '<div class="meta">頻率：' + escapeHtml(s.check_interval_label || fmtInterval(s.check_interval_minutes || 30)) + '　上次檢查：' + lastCheck + '　有變更：' + lastChange + '</div>' +
                         '<div class="actions">' +
                         '<button type="button" class="btn-check primary">立即檢查</button>' +
                         '<button type="button" class="btn-diff">看差異</button>' +
@@ -29,27 +53,187 @@
                         '</div>'
                     );
                 }).join('');
-                listEl.querySelectorAll('.btn-check').forEach(function (btn) {
-                    btn.addEventListener('click', function () {
-                        var id = parseInt(btn.closest('.sub-card').dataset.id, 10);
-                        checkOne(id, btn);
-                    });
-                });
-                listEl.querySelectorAll('.btn-diff').forEach(function (btn) {
-                    btn.addEventListener('click', function () {
-                        var id = parseInt(btn.closest('.sub-card').dataset.id, 10);
-                        showDiff(id, btn.closest('.sub-card').querySelector('.diff-placeholder'));
-                    });
-                });
-                listEl.querySelectorAll('.btn-delete').forEach(function (btn) {
-                    btn.addEventListener('click', function () {
-                        var id = parseInt(btn.closest('.sub-card').dataset.id, 10);
-                        if (confirm('確定要刪除此追蹤？')) deleteOne(id, btn.closest('.sub-card'));
-                    });
-                });
             })
             .catch(function () {
                 listEl.innerHTML = '<p class="meta">無法載入訂閱列表。</p>';
+            });
+    }
+
+        // 用事件委派，避免按鈕綁定失效
+        listEl.addEventListener('click', function (e) {
+            var checkBtn = e.target && e.target.closest ? e.target.closest('.btn-check') : null;
+            if (checkBtn) {
+                var card0 = checkBtn.closest('.sub-card');
+                if (!card0) return;
+                var id1 = parseInt(card0.dataset.id, 10);
+                checkOne(id1, checkBtn);
+                return;
+            }
+
+            var diffBtn = e.target && e.target.closest ? e.target.closest('.btn-diff') : null;
+            if (diffBtn) {
+                var card1 = diffBtn.closest('.sub-card');
+                if (!card1) return;
+                var id2 = parseInt(card1.dataset.id, 10);
+                showDiff(id2, card1.querySelector('.diff-placeholder'));
+                return;
+            }
+
+            var deleteBtn = e.target && e.target.closest ? e.target.closest('.btn-delete') : null;
+            if (deleteBtn) {
+                var card2 = deleteBtn.closest('.sub-card');
+                if (!card2) return;
+                var id3 = parseInt(card2.dataset.id, 10);
+                if (confirm('確定要刪除此追蹤？')) deleteOne(id3, card2);
+            }
+        });
+
+        function loadPresets() {
+        if (!presetEl) return;
+        fetch('/api/presets', { credentials: 'same-origin' })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                var presets = (data && data.presets) ? data.presets : [];
+                if (!presets.length) {
+                    presetEl.innerHTML = '<p class="meta">尚無預設清單。</p>';
+                    return;
+                }
+
+                // group by frequency
+                var groups = {};
+                presets.forEach(function (p) {
+                    var k = p.frequency || '其他';
+                    if (!groups[k]) groups[k] = [];
+                    groups[k].push(p);
+                });
+                var order = ['每日更新', '動態網站', '不定時更新', '每月更新', '每季更新', '其他'];
+                var categories = order.filter(function (k) { return groups[k] && groups[k].length; });
+                var activeCategory = categories[0] || null;
+
+                function renderCategoryCards() {
+                    return (
+                        '<div class="preset-category-grid">' +
+                        categories.map(function (k) {
+                            var active = (k === activeCategory) ? ' active' : '';
+                            return (
+                                '<button type="button" class="preset-category-card' + active + '" data-category="' + escapeHtml(k) + '">' +
+                                '<div class="preset-category-title">' + escapeHtml(k) + '</div>' +
+                                '<div class="meta">' + groups[k].length + ' 個網站</div>' +
+                                '</button>'
+                            );
+                        }).join('') +
+                        '</div>'
+                    );
+                }
+
+                function renderCategorySites() {
+                    if (!activeCategory) return '<p class="meta">尚無分類資料。</p>';
+                    var list = groups[activeCategory] || [];
+                    return (
+                        '<div class="preset-category-sites">' +
+                        '<div class="meta"><strong>' + escapeHtml(activeCategory) + '</strong></div>' +
+                        list.map(function (p) {
+                            var desc = p.watch_description ? ('<div class="meta">' + escapeHtml(p.watch_description) + '</div>') : '';
+                            return (
+                                '<div class="sub-card preset-card" data-pid="' + escapeHtml(p.id) + '">' +
+                                '<h3>' + escapeHtml(p.name) + '</h3>' +
+                                '<div class="url">' + escapeHtml(p.url) + '</div>' +
+                                '<div class="meta">建議頻率：' + fmtInterval(p.check_interval_minutes) + '</div>' +
+                                desc +
+                                '<div class="actions">' +
+                                '<button type="button" class="btn-add primary">一鍵加入</button>' +
+                                '</div>' +
+                                '</div>'
+                            );
+                        }).join('') +
+                        '</div>'
+                    );
+                }
+
+                function renderPresetPanel() {
+                    presetEl.innerHTML = renderCategoryCards() + renderCategorySites();
+                }
+
+                renderPresetPanel();
+
+                presetEl.addEventListener('click', function (e) {
+                    var btn = e.target.closest('.preset-category-card');
+                    if (btn) {
+                        activeCategory = btn.dataset.category;
+                        renderPresetPanel();
+                        return;
+                    }
+
+                    var addBtn = e.target.closest('.btn-add');
+                    if (addBtn) {
+                        var card = addBtn.closest('.preset-card');
+                        if (!card) return;
+                        var pid = card.dataset.pid;
+                        var preset = presets.find(function (p) { return p.id === pid; });
+                        if (!preset) return;
+                        addFromPreset(preset, addBtn);
+                    }
+                });
+            })
+            .catch(function () {
+                presetEl.innerHTML = '<p class="meta">無法載入常用追蹤清單。</p>';
+            });
+    }
+
+    function loadBlockedSites() {
+        if (!blockedEl) return;
+        fetch('/api/blocked-sites', { credentials: 'same-origin' })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                var sites = (data && data.sites) ? data.sites : [];
+                if (!sites.length) {
+                    blockedEl.innerHTML = '<span class="meta">尚無紀錄。</span>';
+                    return;
+                }
+                blockedEl.innerHTML = sites.map(function (s) {
+                    var at = s.last_seen_at ? new Date(s.last_seen_at).toLocaleString('zh-TW') : '-';
+                    return (
+                        '<div class="sub-card preset-card">' +
+                        '<div class="url">' + escapeHtml(s.url) + '</div>' +
+                        '<div class="meta">疑似被擋次數：' + (s.count || 0) + '　最近：' + at + '</div>' +
+                        '<div class="meta">最後錯誤：' + escapeHtml(s.last_error || '-') + '</div>' +
+                        '</div>'
+                    );
+                }).join('');
+            })
+            .catch(function () {
+                blockedEl.innerHTML = '<span class="meta">無法載入反爬紀錄。</span>';
+            });
+    }
+
+    function addFromPreset(preset, btn) {
+        btn.disabled = true;
+        btn.textContent = '加入中…';
+        fetch('/api/subscriptions', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                url: preset.url,
+                name: preset.name,
+                watch_description: preset.watch_description || null,
+                check_interval_minutes: preset.check_interval_minutes
+            })
+        })
+            .then(function (r) {
+                if (r.ok || r.status === 201) return r.json();
+                return r.json().then(function (d) { throw new Error(d.error || '新增失敗'); });
+            })
+            .then(function () {
+                btn.disabled = false;
+                btn.textContent = '一鍵加入';
+                loadSubscriptions();
+                alert('已加入追蹤！');
+            })
+            .catch(function (err) {
+                btn.disabled = false;
+                btn.textContent = '一鍵加入';
+                alert('加入失敗：' + (err && err.message ? err.message : '未知錯誤'));
             });
     }
 
@@ -59,34 +243,47 @@
         return div.innerHTML;
     }
 
-    function formatIntervalLabel(minutes) {
-        if (!minutes) {
-            return '預設 30 分鐘';
-        }
-        var map = {
-            1: '每分鐘',
-            1440: '每天',
-            10080: '每週',
-            129600: '每季',
-            259200: '每半年',
-            525600: '每年',
-        };
-        return map[minutes] || minutes + ' 分鐘';
-    }
-
     function checkOne(id, btn) {
         btn.disabled = true;
         btn.textContent = '檢查中…';
-        fetch('/api/subscriptions/' + id + '/check', { method: 'POST', credentials: 'same-origin' })
-            .then(function (r) { return r.json(); })
-            .then(function () {
-                btn.disabled = false;
-                btn.textContent = '立即檢查';
-                loadSubscriptions();
+        var controller = new AbortController();
+        var timeoutId = setTimeout(function () { controller.abort(); }, 25000);
+        fetch('/api/subscriptions/' + id + '/check', { method: 'POST', credentials: 'same-origin', signal: controller.signal })
+            .then(function (r) {
+                if (!r.ok) return r.json().then(function (d) { throw new Error(d.error || ('HTTP ' + r.status)); });
+                return r.json();
             })
-            .catch(function () {
+            .then(function (data) {
+                clearTimeout(timeoutId);
                 btn.disabled = false;
                 btn.textContent = '立即檢查';
+                if (data && data.ok === false && data.error) {
+                    alert('本次無法完成擷取（仍會更新「上次檢查」時間）：\n' + data.error);
+                } else if (data && data.ok === true) {
+                    if (data.changed) {
+                        if (data.mail_sent === true) {
+                            alert('檢查完成：有變更，且通知信已寄出');
+                        } else if (data.mail_sent === false) {
+                            alert('檢查完成：有變更，但通知信未寄出\n原因：' + (data.mail_error || '未知'));
+                        } else {
+                            alert('檢查完成：有變更');
+                        }
+                    }
+                    else alert('檢查完成：無變更');
+                }
+                loadSubscriptions();
+                loadBlockedSites();
+            })
+            .catch(function (err) {
+                clearTimeout(timeoutId);
+                btn.disabled = false;
+                btn.textContent = '立即檢查';
+                if (err && err.name === 'AbortError') {
+                    alert('立即檢查逾時（25 秒）。\n可能網站太慢或被擋，請稍後重試。');
+                    return;
+                }
+                var msg = (err && err.message) ? err.message : '未知錯誤';
+                alert('立即檢查失敗：' + msg + '\n\n請確認後端有在跑（python app.py）。');
             });
     }
 
@@ -122,12 +319,13 @@
             .catch(function () { alert('刪除失敗'); });
     }
 
-    form.addEventListener('submit', function (e) {
+        form.addEventListener('submit', function (e) {
         e.preventDefault();
         var url = document.getElementById('sub-url').value.trim();
         var name = document.getElementById('sub-name').value.trim() || null;
         var watch = document.getElementById('sub-watch').value.trim() || null;
-        var interval = parseInt(document.getElementById('sub-interval').value, 10) || 30;
+        var intervalVal = document.getElementById('sub-interval').value;
+        var interval = intervalVal ? parseInt(intervalVal, 10) : 1440;
         fetch('/api/subscriptions', {
             method: 'POST',
             credentials: 'same-origin',
@@ -141,6 +339,7 @@
                     document.getElementById('sub-url').value = '';
                     document.getElementById('sub-name').value = '';
                     document.getElementById('sub-watch').value = '';
+                    document.getElementById('sub-interval').value = '1440';
                     loadSubscriptions();
                 } else {
                     return r.json().then(function (d) {
@@ -156,7 +355,14 @@
     });
 
     loadSubscriptions();
-
-    // 自動刷新訂閱列表，讓 last_checked_at 可跟後端自動檢查同步顯示
+    loadPresets();
+    loadBlockedSites();
     setInterval(loadSubscriptions, 10000);
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
 })();

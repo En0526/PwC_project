@@ -1,6 +1,10 @@
 """擷取網頁內容，並可依使用者描述用 AI 擷取關注區塊。"""
 import hashlib
+import os
 import re
+import ssl
+import warnings
+from urllib.parse import urlparse, urlunparse
 import requests
 from bs4 import BeautifulSoup
 
@@ -8,16 +12,68 @@ from backend.services.gemini_service import extract_watch_content
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
+DEFAULT_HEADERS = {
+    "User-Agent": USER_AGENT,
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+}
 
-def fetch_page(url: str, timeout: int = 15) -> tuple[str | None, str | None]:
-    """取得網頁 HTML，回傳 (html_text, error_message)。"""
+
+def _get_insecure_ssl_domains() -> set[str]:
+    # 內建已知憑證異常站台（可再由 .env 擴充）
+    domains = {"www.ardf.org.tw", "law.moj.gov.tw"}
+    raw = (os.environ.get("INSECURE_SSL_DOMAINS") or "").strip()
+    if raw:
+        domains.update({x.strip().lower() for x in raw.split(",") if x.strip()})
+    return domains
+
+
+def _is_insecure_ssl_allowed(url: str) -> bool:
     try:
-        r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=timeout, verify=False)
+        host = (urlparse(url).hostname or "").lower()
+    except Exception:
+        return False
+    return host in _get_insecure_ssl_domains()
+
+
+def fetch_page(url: str, timeout: int = 20) -> tuple[str | None, str | None]:
+    """取得網頁 HTML，回傳 (html_text, error_message)。"""
+    normalized_url = normalize_url(url)
+    try:
+        r = requests.get(normalized_url, headers=DEFAULT_HEADERS, timeout=timeout)
         r.raise_for_status()
         r.encoding = r.apparent_encoding or "utf-8"
         return r.text, None
     except requests.RequestException as e:
+        # 只對白名單網域做 SSL 寬鬆模式 fallback，其他網站仍維持嚴格驗證
+        is_ssl_error = isinstance(getattr(e, "reason", None), ssl.SSLError) or "CERTIFICATE_VERIFY_FAILED" in str(e)
+        if is_ssl_error and _is_insecure_ssl_allowed(normalized_url):
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    r = requests.get(normalized_url, headers=DEFAULT_HEADERS, timeout=timeout, verify=False)
+                r.raise_for_status()
+                r.encoding = r.apparent_encoding or "utf-8"
+                return r.text, None
+            except requests.RequestException as e2:
+                return None, f"{e2}（已嘗試 SSL 寬鬆模式）"
         return None, str(e)
+
+
+def normalize_url(url: str) -> str:
+    """
+    某些站台有舊網域或憑證問題，先做安全的網域正規化。
+    - mopsov.twse.com.tw -> mops.twse.com.tw
+    """
+    try:
+        p = urlparse(url)
+        host = (p.netloc or "").lower()
+        if host == "mopsov.twse.com.tw":
+            p = p._replace(netloc="mops.twse.com.tw")
+            return urlunparse(p)
+        return url
+    except Exception:
+        return url
 
 
 def html_to_clean_text(html: str, max_chars: int = 100_000) -> str:

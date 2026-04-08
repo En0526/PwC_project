@@ -40,10 +40,8 @@ def diff_to_summary(old_text: str, new_text: str, max_snippets: int = 5) -> str:
         for s in removed[:max_snippets]:
             lines.append(s[:200] + ("..." if len(s) > 200 else ""))
     if not lines:
-        # 檢查是否有任何差異
         total_changes = sum(len(text) for op, text in diffs if op != 0)
         if total_changes > 0:
             return f"內容有變更（{total_changes} 字元差異），但可能是格式或小幅修改。"
-        else:
-            return "內容完全相同，無差異。"
+        return "內容完全相同，無差異。"
     return "\n".join(lines)

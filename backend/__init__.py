@@ -26,7 +26,7 @@ def create_app(config_class=Config):
     def unauthorized_callback():
         from flask import request, jsonify, redirect, url_for
 
-        # API endpoints should return JSON 401 instead of redirecting to login page.
+        # API 請求回傳 JSON，頁面請求才導向登入頁
         if request.path.startswith("/api/"):
             return jsonify({"error": "未授權，請先登入。"}), 401
         return redirect(url_for("auth.login"))
@@ -39,8 +39,12 @@ def create_app(config_class=Config):
         from backend.routes.auth import auth_bp
         from backend.routes.subscriptions import subscriptions_bp
         from backend.routes.pages import pages_bp
+        from backend.routes.presets import presets_bp
+        from backend.routes.blocked_sites import blocked_sites_bp
         app.register_blueprint(auth_bp, url_prefix="/auth")
         app.register_blueprint(subscriptions_bp, url_prefix="/api/subscriptions")
+        app.register_blueprint(presets_bp, url_prefix="/api/presets")
+        app.register_blueprint(blocked_sites_bp, url_prefix="/api/blocked-sites")
         app.register_blueprint(pages_bp)
         db.create_all()
 

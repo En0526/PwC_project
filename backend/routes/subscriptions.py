@@ -1,5 +1,5 @@
 """訂閱的 CRUD 與手動檢查、取得差異。"""
-from datetime import datetime, timezone, timedelta
+from datetime import timezone, timedelta
 from flask import Blueprint, request, jsonify, current_app
 from flask_login import login_required, current_user
 
@@ -8,7 +8,17 @@ from backend.services.scraper import scrape_and_extract
 from backend.services.diff_service import diff_to_summary
 from backend.scheduler import run_check_subscription
 
+CHECK_INTERVAL_OPTIONS = {
+    60: "每小時",
+    1440: "每天",
+    10080: "每週",
+    43200: "每月",
+    129600: "每季",
+}
+
+subscriptions_bp = Blueprint("subscriptions", __name__)
 TW_TZ = timezone(timedelta(hours=8))
+
 
 def to_taiwan_iso(dt):
     if not dt:
@@ -17,21 +27,18 @@ def to_taiwan_iso(dt):
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(TW_TZ).isoformat()
 
-CHECK_INTERVAL_OPTIONS = {
-    1: "每分鐘",
-    1440: "每天",
-    10080: "每週",
-    129600: "每季",
-    259200: "每半年",
-    525600: "每年",
-}
 
 def interval_label(minutes):
-    if minutes in CHECK_INTERVAL_OPTIONS:
-        return CHECK_INTERVAL_OPTIONS[minutes]
-    return f"{minutes} 分鐘"
-
-subscriptions_bp = Blueprint("subscriptions", __name__)
+    m = int(minutes or 30)
+    mapping = {
+        1: "每分鐘",
+        60: "每小時",
+        1440: "每天",
+        10080: "每週",
+        43200: "每月",
+        129600: "每季",
+    }
+    return mapping.get(m, f"{m} 分鐘")
 
 
 @subscriptions_bp.route("", methods=["GET"])
@@ -46,7 +53,7 @@ def list_subscriptions():
                 "name": s.name,
                 "watch_description": s.watch_description,
                 "check_interval_minutes": s.check_interval_minutes,
-                "check_interval_label": interval_label(s.check_interval_minutes or 30),
+                "check_interval_label": interval_label(s.check_interval_minutes),
                 "last_checked_at": to_taiwan_iso(s.last_checked_at),
                 "last_changed_at": to_taiwan_iso(s.last_changed_at),
                 "created_at": to_taiwan_iso(s.created_at),
@@ -65,15 +72,13 @@ def create_subscription():
         return jsonify({"error": "請提供網址 url"}), 400
     name = (data.get("name") or "").strip() or None
     watch_description = (data.get("watch_description") or "").strip() or None
-
     check_interval_minutes = data.get("check_interval_minutes")
     try:
-        check_interval_minutes = int(check_interval_minutes) if check_interval_minutes is not None else 30
+        check_interval_minutes = int(check_interval_minutes) if check_interval_minutes is not None else 1440
     except (TypeError, ValueError):
         return jsonify({"error": "檢查頻率無效"}), 400
     if check_interval_minutes not in CHECK_INTERVAL_OPTIONS:
         return jsonify({"error": "檢查頻率未在可選項目中"}), 400
-
     sub = Subscription(
         user_id=current_user.id,
         url=url,
@@ -107,10 +112,10 @@ def get_subscription(sub_id):
         "watch_description": sub.watch_description,
         "check_interval_minutes": sub.check_interval_minutes,
         "check_interval_label": interval_label(sub.check_interval_minutes),
-        "last_checked_at": sub.last_checked_at.isoformat() if sub.last_checked_at else None,
-        "last_changed_at": sub.last_changed_at.isoformat() if sub.last_changed_at else None,
+        "last_checked_at": to_taiwan_iso(sub.last_checked_at),
+        "last_changed_at": to_taiwan_iso(sub.last_changed_at),
         "snapshots": [
-            {"id": s.id, "captured_at": s.captured_at.isoformat() if s.captured_at else None}
+            {"id": s.id, "captured_at": to_taiwan_iso(s.captured_at)}
             for s in snapshots
         ],
     })
@@ -165,11 +170,21 @@ def check_now(sub_id):
     sub = Subscription.query.filter_by(id=sub_id, user_id=current_user.id).first()
     if not sub:
         return jsonify({"error": "找不到此訂閱"}), 404
-    run_check_subscription(sub_id, current_app)
+    before_changed_at = sub.last_changed_at
+    ok, err, changed_internal, mail_sent, mail_error = run_check_subscription(sub_id, current_app)
     sub = Subscription.query.get(sub_id)
+    changed_this_check = False
+    if ok and sub and sub.last_changed_at:
+        if before_changed_at is None or sub.last_changed_at > before_changed_at:
+            changed_this_check = True
     return jsonify({
-        "last_checked_at": sub.last_checked_at.isoformat() if sub.last_checked_at else None,
-        "last_changed_at": sub.last_changed_at.isoformat() if sub.last_changed_at else None,
+        "ok": ok,
+        "error": err,
+        "changed": changed_this_check or changed_internal,
+        "mail_sent": mail_sent,
+        "mail_error": mail_error,
+        "last_checked_at": to_taiwan_iso(sub.last_checked_at),
+        "last_changed_at": to_taiwan_iso(sub.last_changed_at),
     })
 
 
