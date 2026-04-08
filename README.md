@@ -35,7 +35,15 @@ copy .env.example .env
 
 - `FLASK_SECRET_KEY`：任意隨機字串（生產環境必填）
 - `GEMINI_API_KEY`：（選填）在 [Google AI Studio](https://aistudio.google.com/apikey) 取得
-- `CHECK_INTERVAL_MINUTES`：（選填）檢查間隔，預設 30 分鐘
+- `CHECK_INTERVAL_MINUTES`：（選填）排程檢查間隔（系統全域定時觸發），預設 30 分鐘；如要立即就能用訂閱自訂「每分鐘」，可設定為 1 分鐘。
+
+新增訂閱時可指定：
+- 每分鐘（開發用）
+- 每天
+- 每周
+- 每季
+- 每半年
+- 每年
 
 建立資料庫並啟動：
 

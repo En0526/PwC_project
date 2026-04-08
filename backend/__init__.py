@@ -22,6 +22,15 @@ def create_app(config_class=Config):
     login_manager.login_view = "auth.login"
     login_manager.login_message = "請先登入。"
 
+    @login_manager.unauthorized_handler
+    def unauthorized_callback():
+        from flask import request, jsonify, redirect, url_for
+
+        # API endpoints should return JSON 401 instead of redirecting to login page.
+        if request.path.startswith("/api/"):
+            return jsonify({"error": "未授權，請先登入。"}), 401
+        return redirect(url_for("auth.login"))
+
     @login_manager.user_loader
     def load_user(user_id):
         return User.query.get(int(user_id))

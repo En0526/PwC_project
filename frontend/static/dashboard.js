@@ -18,6 +18,7 @@
                         '<h3>' + (s.name || '未命名') + '</h3>' +
                         '<div class="url">' + escapeHtml(s.url) + '</div>' +
                         (s.watch_description ? '<div class="meta">關注：' + escapeHtml(s.watch_description.slice(0, 80)) + (s.watch_description.length > 80 ? '…' : '') + '</div>' : '') +
+                        '<div class="meta">檢查頻率：' + (escapeHtml(s.check_interval_label || formatIntervalLabel(s.check_interval_minutes))) + '</div>' +
                         '<div class="meta">上次檢查：' + lastCheck + '　有變更：' + lastChange + '</div>' +
                         '<div class="actions">' +
                         '<button type="button" class="btn-check primary">立即檢查</button>' +
@@ -56,6 +57,21 @@
         var div = document.createElement('div');
         div.textContent = s;
         return div.innerHTML;
+    }
+
+    function formatIntervalLabel(minutes) {
+        if (!minutes) {
+            return '預設 30 分鐘';
+        }
+        var map = {
+            1: '每分鐘',
+            1440: '每天',
+            10080: '每週',
+            129600: '每季',
+            259200: '每半年',
+            525600: '每年',
+        };
+        return map[minutes] || minutes + ' 分鐘';
     }
 
     function checkOne(id, btn) {
@@ -111,11 +127,12 @@
         var url = document.getElementById('sub-url').value.trim();
         var name = document.getElementById('sub-name').value.trim() || null;
         var watch = document.getElementById('sub-watch').value.trim() || null;
+        var interval = parseInt(document.getElementById('sub-interval').value, 10) || 30;
         fetch('/api/subscriptions', {
             method: 'POST',
             credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url: url, name: name, watch_description: watch })
+            body: JSON.stringify({ url: url, name: name, watch_description: watch, check_interval_minutes: interval })
         })
             .then(function (r) {
                 if (r.ok || r.status === 201) {
@@ -139,4 +156,7 @@
     });
 
     loadSubscriptions();
+
+    // 自動刷新訂閱列表，讓 last_checked_at 可跟後端自動檢查同步顯示
+    setInterval(loadSubscriptions, 10000);
 })();

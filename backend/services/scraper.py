@@ -12,7 +12,7 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTM
 def fetch_page(url: str, timeout: int = 15) -> tuple[str | None, str | None]:
     """取得網頁 HTML，回傳 (html_text, error_message)。"""
     try:
-        r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=timeout)
+        r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=timeout, verify=False)
         r.raise_for_status()
         r.encoding = r.apparent_encoding or "utf-8"
         return r.text, None
@@ -35,6 +35,24 @@ def content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()
 
 
+def scrape_stdtime_clock(url: str, watch_description: str | None) -> str | None:
+    """stdtime.gov.tw/WebClock 特殊處理：取 /Home/GetServerTime 的時間值。"""
+    if not watch_description:
+        return None
+    desc = watch_description.lower()
+    if "stdtime" not in url.lower() or "webclock" not in url.lower():
+        return None
+    if "本機時間" in watch_description or "client time" in desc:
+        # 只能取得 server time API 近似值，並主動回傳一個時間字串
+        api_url = url.split("/home/")[0] + "/Home/GetServerTime"
+        page, err = fetch_page(api_url)
+        if err or not page:
+            return None
+        # API 回傳範例："2026-04-03T14:20:11.9622285+08:00"
+        return f"ServerTime: {page.strip().strip('"')}"
+    return None
+
+
 def scrape_and_extract(
     url: str,
     watch_description: str | None,
@@ -54,6 +72,12 @@ def scrape_and_extract(
     if not watch_description or not watch_description.strip():
         h = content_hash(full_text)
         return full_text, h
+
+    # 先嘗試特殊網站的文字擷取，避免 JS 動態內容導致抓不到差異
+    st_text = scrape_stdtime_clock(url, watch_description)
+    if st_text:
+        h = content_hash(st_text)
+        return st_text, h
 
     if use_gemini and gemini_api_key:
         try:

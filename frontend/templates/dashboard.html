@@ -11,6 +11,16 @@
             <label>網址 <input type="url" id="sub-url" required placeholder="https://example.com/page"></label>
             <label>自訂名稱（選填）<input type="text" id="sub-name" placeholder="例如：台大公告、產品頁"></label>
             <label>要觀看是否有更新的部分（選填）<br><small>例如：公告列表、最新消息區塊、價格表。留空則監測整頁變更。系統會搭配 AI 擷取你描述的區塊。</small><textarea id="sub-watch" rows="3" placeholder="例：頁面上的「最新公告」列表"></textarea></label>
+            <label>自動檢查頻率
+                <select id="sub-interval">
+                    <option value="1">每分鐘（開發用）</option>
+                    <option value="1440">每天</option>
+                    <option value="10080">每周</option>
+                    <option value="129600">每季</option>
+                    <option value="259200">每半年</option>
+                    <option value="525600">每年</option>
+                </select>
+            </label>
             <button type="submit">新增</button>
         </form>
     </section>

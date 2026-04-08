@@ -1,5 +1,5 @@
 """訂閱的 CRUD 與手動檢查、取得差異。"""
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from flask import Blueprint, request, jsonify, current_app
 from flask_login import login_required, current_user
 
@@ -7,6 +7,29 @@ from backend.models import db, Subscription, Snapshot
 from backend.services.scraper import scrape_and_extract
 from backend.services.diff_service import diff_to_summary
 from backend.scheduler import run_check_subscription
+
+TW_TZ = timezone(timedelta(hours=8))
+
+def to_taiwan_iso(dt):
+    if not dt:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(TW_TZ).isoformat()
+
+CHECK_INTERVAL_OPTIONS = {
+    1: "每分鐘",
+    1440: "每天",
+    10080: "每週",
+    129600: "每季",
+    259200: "每半年",
+    525600: "每年",
+}
+
+def interval_label(minutes):
+    if minutes in CHECK_INTERVAL_OPTIONS:
+        return CHECK_INTERVAL_OPTIONS[minutes]
+    return f"{minutes} 分鐘"
 
 subscriptions_bp = Blueprint("subscriptions", __name__)
 
@@ -22,9 +45,11 @@ def list_subscriptions():
                 "url": s.url,
                 "name": s.name,
                 "watch_description": s.watch_description,
-                "last_checked_at": s.last_checked_at.isoformat() if s.last_checked_at else None,
-                "last_changed_at": s.last_changed_at.isoformat() if s.last_changed_at else None,
-                "created_at": s.created_at.isoformat() if s.created_at else None,
+                "check_interval_minutes": s.check_interval_minutes,
+                "check_interval_label": interval_label(s.check_interval_minutes or 30),
+                "last_checked_at": to_taiwan_iso(s.last_checked_at),
+                "last_changed_at": to_taiwan_iso(s.last_changed_at),
+                "created_at": to_taiwan_iso(s.created_at),
             }
             for s in subs
         ]
@@ -40,15 +65,32 @@ def create_subscription():
         return jsonify({"error": "請提供網址 url"}), 400
     name = (data.get("name") or "").strip() or None
     watch_description = (data.get("watch_description") or "").strip() or None
+
+    check_interval_minutes = data.get("check_interval_minutes")
+    try:
+        check_interval_minutes = int(check_interval_minutes) if check_interval_minutes is not None else 30
+    except (TypeError, ValueError):
+        return jsonify({"error": "檢查頻率無效"}), 400
+    if check_interval_minutes not in CHECK_INTERVAL_OPTIONS:
+        return jsonify({"error": "檢查頻率未在可選項目中"}), 400
+
     sub = Subscription(
         user_id=current_user.id,
         url=url,
         name=name,
         watch_description=watch_description,
+        check_interval_minutes=check_interval_minutes,
     )
     db.session.add(sub)
     db.session.commit()
-    return jsonify({"id": sub.id, "url": sub.url, "name": sub.name, "watch_description": sub.watch_description}), 201
+    return jsonify({
+        "id": sub.id,
+        "url": sub.url,
+        "name": sub.name,
+        "watch_description": sub.watch_description,
+        "check_interval_minutes": sub.check_interval_minutes,
+        "check_interval_label": interval_label(sub.check_interval_minutes),
+    }), 201
 
 
 @subscriptions_bp.route("/<int:sub_id>", methods=["GET"])
@@ -63,6 +105,8 @@ def get_subscription(sub_id):
         "url": sub.url,
         "name": sub.name,
         "watch_description": sub.watch_description,
+        "check_interval_minutes": sub.check_interval_minutes,
+        "check_interval_label": interval_label(sub.check_interval_minutes),
         "last_checked_at": sub.last_checked_at.isoformat() if sub.last_checked_at else None,
         "last_changed_at": sub.last_changed_at.isoformat() if sub.last_changed_at else None,
         "snapshots": [
@@ -85,8 +129,23 @@ def update_subscription(sub_id):
         sub.name = (data["name"] or "").strip() or None
     if "watch_description" in data:
         sub.watch_description = (data["watch_description"] or "").strip() or None
+    if "check_interval_minutes" in data:
+        try:
+            interval = int(data["check_interval_minutes"])
+        except (TypeError, ValueError):
+            return jsonify({"error": "檢查頻率無效"}), 400
+        if interval not in CHECK_INTERVAL_OPTIONS:
+            return jsonify({"error": "檢查頻率未在可選項目中"}), 400
+        sub.check_interval_minutes = interval
     db.session.commit()
-    return jsonify({"id": sub.id, "url": sub.url, "name": sub.name, "watch_description": sub.watch_description})
+    return jsonify({
+        "id": sub.id,
+        "url": sub.url,
+        "name": sub.name,
+        "watch_description": sub.watch_description,
+        "check_interval_minutes": sub.check_interval_minutes,
+        "check_interval_label": interval_label(sub.check_interval_minutes),
+    })
 
 
 @subscriptions_bp.route("/<int:sub_id>", methods=["DELETE"])
@@ -128,6 +187,6 @@ def get_diff(sub_id):
     summary = diff_to_summary(old_t, new_t)
     return jsonify({
         "diff_summary": summary,
-        "old_at": snapshots[1].captured_at.isoformat() if snapshots[1].captured_at else None,
-        "new_at": snapshots[0].captured_at.isoformat() if snapshots[0].captured_at else None,
+        "old_at": to_taiwan_iso(snapshots[1].captured_at),
+        "new_at": to_taiwan_iso(snapshots[0].captured_at),
     })
