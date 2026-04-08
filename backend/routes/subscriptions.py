@@ -3,7 +3,7 @@ from datetime import timezone, timedelta
 from flask import Blueprint, request, jsonify, current_app
 from flask_login import login_required, current_user
 
-from backend.models import db, Subscription, Snapshot
+from backend.models import db, Subscription, Snapshot, Notification
 from backend.services.scraper import scrape_and_extract
 from backend.services.diff_service import diff_to_summary
 from backend.scheduler import run_check_subscription
@@ -190,6 +190,74 @@ def check_now(sub_id):
     })
 
 
+@subscriptions_bp.route("/check-all", methods=["POST"])
+@login_required
+def check_all_now():
+    subs = Subscription.query.filter_by(user_id=current_user.id).all()
+    if not subs:
+        return jsonify({"ok": True, "checked_count": 0, "changed_count": 0, "messages": ["目前沒有任何追蹤項目。"]})
+
+    checked_count = 0
+    changed_count = 0
+    results = []
+
+    for sub in subs:
+        checked_count += 1
+        try:
+            ok, err, changed_internal, mail_sent, mail_error = run_check_subscription(sub.id, current_app)
+            if changed_internal:
+                changed_count += 1
+            message = None
+            if ok:
+                if changed_internal:
+                    message = f"手動檢查：您的訂閱 '{sub.name or sub.url}' 已檢查，並發現更新。"
+                else:
+                    message = f"手動檢查：您的訂閱 '{sub.name or sub.url}' 已檢查，暫時無變更。"
+                notification = Notification(
+                    user_id=current_user.id,
+                    subscription_id=sub.id,
+                    message=message,
+                )
+                db.session.add(notification)
+            else:
+                message = f"手動檢查失敗：'{sub.name or sub.url}' 無法完成擷取。"
+                notification = Notification(
+                    user_id=current_user.id,
+                    subscription_id=sub.id,
+                    message=message,
+                )
+                db.session.add(notification)
+            results.append({"subscription_id": sub.id, "ok": ok, "changed": changed_internal, "error": err})
+        except Exception as e:
+            message = f"手動檢查錯誤：'{sub.name or sub.url}' 發生例外。"
+            notification = Notification(
+                user_id=current_user.id,
+                subscription_id=sub.id,
+                message=message,
+            )
+            db.session.add(notification)
+            results.append({"subscription_id": sub.id, "ok": False, "changed": False, "error": str(e)})
+
+    db.session.commit()
+    return jsonify({
+        "ok": True,
+        "checked_count": checked_count,
+        "changed_count": changed_count,
+        "results": results,
+    })
+
+
+@subscriptions_bp.route("/all", methods=["DELETE"])
+@login_required
+def delete_all_subscriptions():
+    subs = Subscription.query.filter_by(user_id=current_user.id).all()
+    for sub in subs:
+        db.session.delete(sub)
+    Notification.query.filter_by(user_id=current_user.id).delete()
+    db.session.commit()
+    return jsonify({"ok": True, "deleted_subscriptions": len(subs)})
+
+
 @subscriptions_bp.route("/<int:sub_id>/diff")
 @login_required
 def get_diff(sub_id):
@@ -207,3 +275,74 @@ def get_diff(sub_id):
         "old_at": to_taiwan_iso(snapshots[1].captured_at),
         "new_at": to_taiwan_iso(snapshots[0].captured_at),
     })
+
+
+@subscriptions_bp.route("/notifications", methods=["GET"])
+@login_required
+def list_notifications():
+    # 最多返回10則最新通知
+    notifications = Notification.query.filter_by(user_id=current_user.id).order_by(Notification.created_at.desc()).limit(10).all()
+    unread_count = Notification.query.filter_by(user_id=current_user.id, is_read=False).count()
+    return jsonify({
+        "notifications": [
+            {
+                "id": n.id,
+                "subscription_id": n.subscription_id,
+                "message": n.message,
+                "is_read": n.is_read,
+                "created_at": n.created_at.isoformat() if n.created_at else None,
+            }
+            for n in notifications
+        ],
+        "has_more": Notification.query.filter_by(user_id=current_user.id).count() > 10,
+        "unread_count": unread_count,
+    })
+
+
+@subscriptions_bp.route("/notifications/all", methods=["GET"])
+@login_required
+def list_all_notifications():
+    # 返回所有通知（用於展開功能）
+    notifications = Notification.query.filter_by(user_id=current_user.id).order_by(Notification.created_at.desc()).all()
+    return jsonify({
+        "notifications": [
+            {
+                "id": n.id,
+                "subscription_id": n.subscription_id,
+                "message": n.message,
+                "is_read": n.is_read,
+                "created_at": n.created_at.isoformat() if n.created_at else None,
+            }
+            for n in notifications
+        ]
+    })
+
+
+@subscriptions_bp.route("/notifications/<int:notif_id>/read", methods=["POST"])
+@login_required
+def mark_notification_read(notif_id):
+    notif = Notification.query.filter_by(id=notif_id, user_id=current_user.id).first()
+    if not notif:
+        return jsonify({"error": "找不到此通知"}), 404
+    notif.is_read = True
+    db.session.commit()
+    return jsonify({"ok": True}), 200
+
+
+@subscriptions_bp.route("/notifications/<int:notif_id>", methods=["DELETE"])
+@login_required
+def delete_notification(notif_id):
+    notif = Notification.query.filter_by(id=notif_id, user_id=current_user.id).first()
+    if not notif:
+        return jsonify({"error": "找不到此通知"}), 404
+    db.session.delete(notif)
+    db.session.commit()
+    return jsonify({"ok": True}), 200
+
+
+@subscriptions_bp.route("/notifications/all", methods=["DELETE"])
+@login_required
+def delete_all_notifications():
+    deleted_count = Notification.query.filter_by(user_id=current_user.id).delete()
+    db.session.commit()
+    return jsonify({"ok": True, "deleted_count": deleted_count}), 200

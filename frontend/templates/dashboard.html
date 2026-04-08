@@ -17,6 +17,17 @@
         </aside>
 
         <div class="dashboard-main">
+            <section class="notifications">
+                <div class="panel-header">
+                    <h2>最新通知 <span id="unread-count" class="unread-badge" style="display:none;"></span></h2>
+                    <div class="notification-actions">
+                        <button id="btn-delete-all-notifications" type="button" class="btn-delete-all-notifications danger">刪除所有通知</button>
+                        <div id="expand-notifications" class="expand-link" style="display:none;">展開全部</div>
+                    </div>
+                </div>
+                <div id="notif-list"></div>
+            </section>
+
             <section class="add-subscription">
                 <h2>新增追蹤</h2>
                 <form id="form-add-sub">
@@ -41,6 +52,10 @@
 
             <section class="subscription-list">
                 <h2>目前追蹤</h2>
+                <div class="list-actions">
+                    <button id="btn-check-all" type="button" class="btn-check-all primary">全部檢查</button>
+                    <button id="btn-delete-all" type="button" class="btn-delete-all danger">全部刪除</button>
+                </div>
                 <div id="sub-list"></div>
             </section>
 
