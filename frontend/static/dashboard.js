@@ -21,6 +21,8 @@
         const form = qs('form-add-sub');
         const presetEl = qs('preset-list');
         const blockedEl = qs('blocked-list');
+        const intervalSelect = qs('sub-interval');
+        const intervalCustomInput = qs('sub-interval-custom');
 
         if (!listEl || !form) {
             alert('前端初始化失敗：找不到必要的 DOM（請重新整理頁面）。');
@@ -28,6 +30,10 @@
         }
 
         function loadSubscriptions() {
+        // 若「看差異」目前有展開，避免自動刷新把內容收起
+        if (listEl.querySelector('.diff-placeholder[data-open="1"]')) {
+            return;
+        }
         fetch('/api/subscriptions', { credentials: 'same-origin' })
             .then(function (r) { return r.json(); })
             .then(function (data) {
@@ -98,6 +104,7 @@
                     presetEl.innerHTML = '<p class="meta">尚無預設清單。</p>';
                     return;
                 }
+                syncIntervalOptionsFromPresets(presets);
 
                 // group by frequency
                 var groups = {};
@@ -237,6 +244,25 @@
             });
     }
 
+    function syncIntervalOptionsFromPresets(presets) {
+        if (!intervalSelect) return;
+        var existing = {};
+        Array.prototype.forEach.call(intervalSelect.options, function (opt) {
+            existing[String(opt.value)] = true;
+        });
+        presets.forEach(function (p) {
+            var mins = parseInt(p.check_interval_minutes, 10);
+            if (!Number.isFinite(mins) || mins <= 0) return;
+            var key = String(mins);
+            if (existing[key]) return;
+            var opt = document.createElement('option');
+            opt.value = key;
+            opt.textContent = fmtInterval(mins);
+            intervalSelect.appendChild(opt);
+            existing[key] = true;
+        });
+    }
+
     function escapeHtml(s) {
         var div = document.createElement('div');
         div.textContent = s;
@@ -290,10 +316,12 @@
     function showDiff(id, boxEl) {
         if (boxEl.style.display === 'block' && boxEl.dataset.loaded === '1') {
             boxEl.style.display = 'none';
+            boxEl.dataset.open = '0';
             return;
         }
         boxEl.textContent = '載入中…';
         boxEl.style.display = 'block';
+        boxEl.dataset.open = '1';
         boxEl.dataset.loaded = '0';
         fetch('/api/subscriptions/' + id + '/diff', { credentials: 'same-origin' })
             .then(function (r) { return r.json(); })
@@ -308,6 +336,13 @@
                 boxEl.textContent = '無法取得差異。';
                 boxEl.dataset.loaded = '1';
             });
+    }
+
+    function toggleCustomIntervalInput() {
+        if (!intervalSelect || !intervalCustomInput) return;
+        var isCustom = intervalSelect.value === 'custom';
+        intervalCustomInput.style.display = isCustom ? 'block' : 'none';
+        if (!isCustom) intervalCustomInput.value = '';
     }
 
     function deleteOne(id, cardEl) {
@@ -325,7 +360,17 @@
         var name = document.getElementById('sub-name').value.trim() || null;
         var watch = document.getElementById('sub-watch').value.trim() || null;
         var intervalVal = document.getElementById('sub-interval').value;
-        var interval = intervalVal ? parseInt(intervalVal, 10) : 1440;
+        var interval = 1440;
+        if (intervalVal === 'custom') {
+            var customVal = intervalCustomInput ? intervalCustomInput.value.trim() : '';
+            interval = customVal ? parseInt(customVal, 10) : NaN;
+            if (!Number.isFinite(interval) || interval <= 0) {
+                alert('請輸入有效的自訂分鐘數（需大於 0）。');
+                return;
+            }
+        } else {
+            interval = intervalVal ? parseInt(intervalVal, 10) : 1440;
+        }
         fetch('/api/subscriptions', {
             method: 'POST',
             credentials: 'same-origin',
@@ -340,6 +385,8 @@
                     document.getElementById('sub-name').value = '';
                     document.getElementById('sub-watch').value = '';
                     document.getElementById('sub-interval').value = '1440';
+                    if (intervalCustomInput) intervalCustomInput.value = '';
+                    toggleCustomIntervalInput();
                     loadSubscriptions();
                 } else {
                     return r.json().then(function (d) {
@@ -357,6 +404,10 @@
     loadSubscriptions();
     loadPresets();
     loadBlockedSites();
+    if (intervalSelect) {
+        intervalSelect.addEventListener('change', toggleCustomIntervalInput);
+    }
+    toggleCustomIntervalInput();
     setInterval(loadSubscriptions, 10000);
     }
 

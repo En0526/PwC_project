@@ -14,6 +14,7 @@ CHECK_INTERVAL_OPTIONS = {
     10080: "每週",
     43200: "每月",
     129600: "每季",
+    525600: "每年",
 }
 
 subscriptions_bp = Blueprint("subscriptions", __name__)
@@ -37,6 +38,7 @@ def interval_label(minutes):
         10080: "每週",
         43200: "每月",
         129600: "每季",
+        525600: "每年",
     }
     return mapping.get(m, f"{m} 分鐘")
 
@@ -77,8 +79,8 @@ def create_subscription():
         check_interval_minutes = int(check_interval_minutes) if check_interval_minutes is not None else 1440
     except (TypeError, ValueError):
         return jsonify({"error": "檢查頻率無效"}), 400
-    if check_interval_minutes not in CHECK_INTERVAL_OPTIONS:
-        return jsonify({"error": "檢查頻率未在可選項目中"}), 400
+    if check_interval_minutes <= 0:
+        return jsonify({"error": "檢查頻率需大於 0 分鐘"}), 400
     sub = Subscription(
         user_id=current_user.id,
         url=url,
@@ -139,8 +141,8 @@ def update_subscription(sub_id):
             interval = int(data["check_interval_minutes"])
         except (TypeError, ValueError):
             return jsonify({"error": "檢查頻率無效"}), 400
-        if interval not in CHECK_INTERVAL_OPTIONS:
-            return jsonify({"error": "檢查頻率未在可選項目中"}), 400
+        if interval <= 0:
+            return jsonify({"error": "檢查頻率需大於 0 分鐘"}), 400
         sub.check_interval_minutes = interval
     db.session.commit()
     return jsonify({

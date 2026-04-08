@@ -9,6 +9,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from backend.services.gemini_service import extract_watch_content
+from backend.services.presets import get_presets
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
@@ -22,6 +23,14 @@ DEFAULT_HEADERS = {
 def _get_insecure_ssl_domains() -> set[str]:
     # 內建已知憑證異常站台（可再由 .env 擴充）
     domains = {"www.ardf.org.tw", "law.moj.gov.tw"}
+    # 常用清單中的網站一律視為 SSL 白名單（使用者要求）
+    for p in get_presets():
+        try:
+            host = (urlparse(p.url).hostname or "").lower()
+        except Exception:
+            host = ""
+        if host:
+            domains.add(host)
     raw = (os.environ.get("INSECURE_SSL_DOMAINS") or "").strip()
     if raw:
         domains.update({x.strip().lower() for x in raw.split(",") if x.strip()})

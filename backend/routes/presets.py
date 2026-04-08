@@ -15,12 +15,12 @@ def list_presets():
     presets = get_presets()
     blocked_sites = list_blocked_sites(current_app)
 
-    # 明確反爬且重複發生的站台，從常用清單中自動隱藏
+    # 明確反爬站台，從常用清單中自動隱藏（首次命中就生效）
     blocked_hosts = set()
     for site in blocked_sites:
         err = site.get("last_error") or ""
         cnt = int(site.get("count") or 0)
-        if cnt < 2 or not looks_like_anti_bot(err):
+        if cnt < 1 or not looks_like_anti_bot(err):
             continue
         try:
             host = (urlparse(site.get("url") or "").hostname or "").lower()
