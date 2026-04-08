@@ -21,6 +21,8 @@
         const form = qs('form-add-sub');
         const presetEl = qs('preset-list');
         const blockedEl = qs('blocked-list');
+        const notifEl = qs('notif-list');
+        const expandLink = qs('expand-notifications');
 
         if (!listEl || !form) {
             alert('前端初始化失敗：找不到必要的 DOM（請重新整理頁面）。');
@@ -243,6 +245,183 @@
         return div.innerHTML;
     }
 
+    function loadNotifications() {
+        if (!notifEl) return;
+        fetch('/api/subscriptions/notifications', { credentials: 'same-origin' })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                var notifications = (data && data.notifications) ? data.notifications : [];
+                var hasMore = data && data.has_more;
+                
+                var unreadBadge = qs('unread-count');
+                if (unreadBadge) {
+                    if (data && typeof data.unread_count === 'number' && data.unread_count > 0) {
+                        unreadBadge.textContent = '(' + data.unread_count + ' 未讀)';
+                        unreadBadge.style.display = 'inline';
+                    } else {
+                        unreadBadge.style.display = 'none';
+                    }
+                }
+                
+                if (!notifications.length) {
+                    notifEl.innerHTML = '<p class="meta">目前沒有通知。</p>';
+                    if (expandLink) expandLink.style.display = 'none';
+                    return;
+                }
+                
+                notifEl.innerHTML = notifications.map(function (n) {
+                    var created = n.created_at ? new Date(n.created_at).toLocaleString('zh-TW') : '';
+                    var className = n.is_read ? 'notif-card read' : 'notif-card unread';
+                    return (
+                        '<div class="' + className + '" data-id="' + n.id + '">' +
+                        '<div class="message">' + escapeHtml(n.message) + '</div>' +
+                        '<div class="meta">時間：' + created + '</div>' +
+                        '<div class="actions">' +
+                        (!n.is_read ? '<button type="button" class="btn-mark-read">標記已讀</button>' : '') +
+                        '<button type="button" class="btn-delete-notif danger">刪除</button>' +
+                        '</div>' +
+                        '</div>'
+                    );
+                }).join('');
+                
+                if (expandLink) {
+                    expandLink.style.display = hasMore ? 'block' : 'none';
+                }
+                
+                // 添加事件監聽器
+                notifEl.querySelectorAll('.btn-mark-read').forEach(function (btn) {
+                    btn.addEventListener('click', function () {
+                        var id = parseInt(btn.closest('.notif-card').dataset.id, 10);
+                        markNotificationRead(id, btn.closest('.notif-card'));
+                    });
+                });
+                
+                notifEl.querySelectorAll('.btn-delete-notif').forEach(function (btn) {
+                    btn.addEventListener('click', function () {
+                        var id = parseInt(btn.closest('.notif-card').dataset.id, 10);
+                        deleteNotification(id, btn.closest('.notif-card'));
+                    });
+                });
+            })
+            .catch(function () {
+                notifEl.innerHTML = '<p class="error">載入通知失敗。</p>';
+            });
+    }
+
+    function loadAllNotifications() {
+        if (!notifEl) return;
+        fetch('/api/subscriptions/notifications/all', { credentials: 'same-origin' })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                var notifications = (data && data.notifications) ? data.notifications : [];
+                
+                if (!notifications.length) {
+                    notifEl.innerHTML = '<p class="meta">目前沒有通知。</p>';
+                    return;
+                }
+                
+                notifEl.innerHTML = notifications.map(function (n) {
+                    var created = n.created_at ? new Date(n.created_at).toLocaleString('zh-TW') : '';
+                    var className = n.is_read ? 'notif-card read' : 'notif-card unread';
+                    return (
+                        '<div class="' + className + '" data-id="' + n.id + '">' +
+                        '<div class="message">' + escapeHtml(n.message) + '</div>' +
+                        '<div class="meta">時間：' + created + '</div>' +
+                        '<div class="actions">' +
+                        (!n.is_read ? '<button type="button" class="btn-mark-read">標記已讀</button>' : '') +
+                        '<button type="button" class="btn-delete-notif danger">刪除</button>' +
+                        '</div>' +
+                        '</div>'
+                    );
+                }).join('');
+                
+                if (expandLink) {
+                    expandLink.style.display = 'none'; // 已經展開了
+                    expandLink.textContent = '收起';
+                    expandLink.addEventListener('click', function() {
+                        loadNotifications(); // 重新載入前10則
+                        expandLink.textContent = '展開全部';
+                    });
+                }
+                
+                // 添加事件監聽器
+                notifEl.querySelectorAll('.btn-mark-read').forEach(function (btn) {
+                    btn.addEventListener('click', function () {
+                        var id = parseInt(btn.closest('.notif-card').dataset.id, 10);
+                        markNotificationRead(id, btn.closest('.notif-card'));
+                    });
+                });
+                
+                notifEl.querySelectorAll('.btn-delete-notif').forEach(function (btn) {
+                    btn.addEventListener('click', function () {
+                        var id = parseInt(btn.closest('.notif-card').dataset.id, 10);
+                        deleteNotification(id, btn.closest('.notif-card'));
+                    });
+                });
+            })
+            .catch(function () {
+                notifEl.innerHTML = '<p class="error">載入所有通知失敗。</p>';
+            });
+    }
+
+    function markNotificationRead(id, cardEl) {
+        fetch('/api/subscriptions/notifications/' + id + '/read', {
+            method: 'POST',
+            credentials: 'same-origin'
+        })
+            .then(function (r) { return r.json(); })
+            .then(function () {
+                cardEl.classList.remove('unread');
+                cardEl.classList.add('read');
+                var btn = cardEl.querySelector('.btn-mark-read');
+                if (btn) btn.remove();
+            })
+            .catch(function () {
+                alert('標記已讀失敗。');
+            });
+    }
+
+    function deleteNotification(id, cardEl) {
+        if (!confirm('確定要刪除此通知？')) return;
+        
+        fetch('/api/subscriptions/notifications/' + id, {
+            method: 'DELETE',
+            credentials: 'same-origin'
+        })
+            .then(function (r) { return r.json(); })
+            .then(function () {
+                cardEl.remove();
+                // 如果沒有通知了，重新載入
+                if (notifEl.children.length === 0) {
+                    loadNotifications();
+                }
+            })
+            .catch(function () {
+                alert('刪除通知失敗。');
+            });
+    }
+
+    function deleteAllNotifications() {
+        if (!confirm('確定要刪除所有通知嗎？此動作無法復原。')) return;
+        
+        fetch('/api/subscriptions/notifications/all', {
+            method: 'DELETE',
+            credentials: 'same-origin'
+        })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (data && data.ok) {
+                    alert('已刪除所有通知（共 ' + (data.deleted_count || 0) + ' 則）。');
+                    loadNotifications();
+                } else {
+                    alert('刪除所有通知失敗。');
+                }
+            })
+            .catch(function () {
+                alert('刪除所有通知失敗，請確認後端有在跑。');
+            });
+    }
+
     function checkOne(id, btn) {
         btn.disabled = true;
         btn.textContent = '檢查中…';
@@ -354,10 +533,88 @@
             });
     });
 
+    function checkAll() {
+        var btn = qs('btn-check-all');
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = '檢查中…';
+        }
+        fetch('/api/subscriptions/check-all', { method: 'POST', credentials: 'same-origin' })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.textContent = '全部檢查';
+                }
+                if (data && data.ok) {
+                    alert('已完成全部手動檢查：' + data.checked_count + ' 個追蹤，發現 ' + data.changed_count + ' 個更新。');
+                    loadSubscriptions();
+                    loadNotifications();
+                    loadBlockedSites();
+                } else {
+                    alert('全部檢查發生錯誤。');
+                }
+            })
+            .catch(function () {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.textContent = '全部檢查';
+                }
+                alert('全部檢查失敗，請確認後端有在跑。');
+            });
+    }
+
+    function deleteAll() {
+        if (!confirm('確定要刪除所有追蹤項目與通知嗎？此動作無法復原。')) return;
+        fetch('/api/subscriptions/all', { method: 'DELETE', credentials: 'same-origin' })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (data && data.ok) {
+                    alert('已刪除全部追蹤項目。');
+                    loadSubscriptions();
+                    loadNotifications();
+                } else {
+                    alert('刪除全部失敗。');
+                }
+            })
+            .catch(function () {
+                alert('刪除全部失敗，請確認後端有在跑。');
+            });
+    }
+
+    var checkAllBtn = qs('btn-check-all');
+    if (checkAllBtn) {
+        checkAllBtn.addEventListener('click', checkAll);
+    }
+    var deleteAllBtn = qs('btn-delete-all');
+    if (deleteAllBtn) {
+        deleteAllBtn.addEventListener('click', deleteAll);
+    }
+
     loadSubscriptions();
     loadPresets();
     loadBlockedSites();
+    loadNotifications();
     setInterval(loadSubscriptions, 10000);
+    setInterval(loadNotifications, 30000); // 每30秒檢查新通知
+    
+    // 刪除所有通知事件
+    var deleteAllNotifBtn = qs('btn-delete-all-notifications');
+    if (deleteAllNotifBtn) {
+        deleteAllNotifBtn.addEventListener('click', deleteAllNotifications);
+    }
+    
+    // 展開通知事件
+    if (expandLink) {
+        expandLink.addEventListener('click', function() {
+            if (expandLink.textContent === '展開全部') {
+                loadAllNotifications();
+            } else {
+                loadNotifications();
+                expandLink.textContent = '展開全部';
+            }
+        });
+    }
     }
 
     if (document.readyState === 'loading') {

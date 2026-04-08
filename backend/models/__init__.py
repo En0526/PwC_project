@@ -12,6 +12,7 @@ class User(UserMixin, db.Model):
     created_at = db.Column(db.DateTime, server_default=db.func.now())
 
     subscriptions = db.relationship("Subscription", backref="user", lazy=True, cascade="all, delete-orphan")
+    notifications = db.relationship("Notification", backref="user", lazy=True, cascade="all, delete-orphan")
 
 
 class Subscription(db.Model):
@@ -37,3 +38,13 @@ class Snapshot(db.Model):
     content_text = db.Column(db.Text, nullable=True)  # 擷取出的文字（依 watch_description 或全文）
     content_full = db.Column(db.Text, nullable=True)  # 可選：完整 HTML 或 text
     captured_at = db.Column(db.DateTime, server_default=db.func.now())
+
+
+class Notification(db.Model):
+    __tablename__ = "notifications"
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    subscription_id = db.Column(db.Integer, db.ForeignKey("subscriptions.id"), nullable=False)
+    message = db.Column(db.Text, nullable=False)
+    is_read = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, server_default=db.func.now())

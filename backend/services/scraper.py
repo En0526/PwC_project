@@ -93,20 +93,18 @@ def content_hash(text: str) -> str:
 
 def scrape_stdtime_clock(url: str, watch_description: str | None) -> str | None:
     """stdtime.gov.tw/WebClock 特殊處理：取 /Home/GetServerTime 的時間值。"""
-    if not watch_description:
-        return None
-    desc = watch_description.lower()
     if "stdtime" not in url.lower() or "webclock" not in url.lower():
         return None
-    if "本機時間" in watch_description or "client time" in desc:
-        # 只能取得 server time API 近似值，並主動回傳一個時間字串
-        api_url = url.split("/home/")[0] + "/Home/GetServerTime"
-        page, err = fetch_page(api_url)
-        if err or not page:
-            return None
-        # API 回傳範例："2026-04-03T14:20:11.9622285+08:00"
-        return f"ServerTime: {page.strip().strip('"')}"
-    return None
+
+    # stdtime 的 WebClock 頁面主要用 JS 更新時間，原始 HTML 不一定會有變化。
+    from urllib.parse import urlparse, urlunparse
+    parsed = urlparse(url)
+    api_url = urlunparse(parsed._replace(path="/Home/GetServerTime", query="", fragment=""))
+    page, err = fetch_page(api_url)
+    if err or not page:
+        return None
+    # API 回傳範例："2026-04-03T14:20:11.9622285+08:00"
+    return f"ServerTime: {page.strip().strip('"')}"
 
 
 def scrape_and_extract(
@@ -125,15 +123,16 @@ def scrape_and_extract(
         raise RuntimeError(f"無法取得網頁: {err}")
 
     full_text = html_to_clean_text(html)
-    if not watch_description or not watch_description.strip():
-        h = content_hash(full_text)
-        return full_text, h
 
     # 先嘗試特殊網站的文字擷取，避免 JS 動態內容導致抓不到差異
     st_text = scrape_stdtime_clock(url, watch_description)
     if st_text:
         h = content_hash(st_text)
         return st_text, h
+
+    if not watch_description or not watch_description.strip():
+        h = content_hash(full_text)
+        return full_text, h
 
     if use_gemini and gemini_api_key:
         try:
