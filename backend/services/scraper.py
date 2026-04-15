@@ -10,6 +10,7 @@ from bs4 import BeautifulSoup
 
 from backend.services.gemini_service import extract_watch_content
 from backend.services.presets import get_presets
+from backend.services.stdtime_notify import format_stdtime_snapshot_from_api_body
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
@@ -113,7 +114,7 @@ def scrape_stdtime_clock(url: str, watch_description: str | None) -> str | None:
     if err or not page:
         return None
     # API 回傳範例："2026-04-03T14:20:11.9622285+08:00"
-    return f"ServerTime: {page.strip().strip('"')}"
+    return format_stdtime_snapshot_from_api_body(page)
 
 
 def scrape_and_extract(

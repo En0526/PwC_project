@@ -6,6 +6,7 @@ from flask_login import login_required, current_user
 from backend.models import db, Subscription, Snapshot, Notification
 from backend.services.scraper import scrape_and_extract
 from backend.services.diff_service import diff_to_summary
+from backend.services.stdtime_notify import is_stdtime_webclock_url, stdtime_diff_summary
 from backend.scheduler import run_check_subscription
 
 CHECK_INTERVAL_OPTIONS = {
@@ -19,6 +20,7 @@ CHECK_INTERVAL_OPTIONS = {
 
 subscriptions_bp = Blueprint("subscriptions", __name__)
 TW_TZ = timezone(timedelta(hours=8))
+NOTIFICATION_PREVIEW_LIMIT = 6
 
 
 def to_taiwan_iso(dt):
@@ -43,6 +45,37 @@ def interval_label(minutes):
     return mapping.get(m, f"{m} 分鐘")
 
 
+def interval_label_for_subscription(url, minutes):
+    if is_stdtime_webclock_url(url):
+        return "每30秒"
+    return interval_label(minutes)
+
+
+def serialize_notification(n, diff_cache=None):
+    message = n.message or ""
+    diff_summary = None
+    display_message = message
+
+    # 通知建立時就把差異摘要寫進 message；這裡直接解析，避免用「最新快照」重算而造成舊通知內容被覆蓋。
+    marker = "有更新："
+    if marker in message:
+        prefix, suffix = message.split(marker, 1)
+        display_message = (prefix + "有更新").strip()
+        parsed = suffix.strip()
+        if parsed.endswith("..."):
+            parsed = parsed[:-3].rstrip()
+        diff_summary = parsed or None
+
+    return {
+        "id": n.id,
+        "subscription_id": n.subscription_id,
+        "message": display_message,
+        "diff_summary": diff_summary,
+        "is_read": n.is_read,
+        "created_at": n.created_at.isoformat() if n.created_at else None,
+    }
+
+
 @subscriptions_bp.route("", methods=["GET"])
 @login_required
 def list_subscriptions():
@@ -55,7 +88,7 @@ def list_subscriptions():
                 "name": s.name,
                 "watch_description": s.watch_description,
                 "check_interval_minutes": s.check_interval_minutes,
-                "check_interval_label": interval_label(s.check_interval_minutes),
+                "check_interval_label": interval_label_for_subscription(s.url, s.check_interval_minutes),
                 "last_checked_at": to_taiwan_iso(s.last_checked_at),
                 "last_changed_at": to_taiwan_iso(s.last_changed_at),
                 "created_at": to_taiwan_iso(s.created_at),
@@ -96,7 +129,7 @@ def create_subscription():
         "name": sub.name,
         "watch_description": sub.watch_description,
         "check_interval_minutes": sub.check_interval_minutes,
-        "check_interval_label": interval_label(sub.check_interval_minutes),
+        "check_interval_label": interval_label_for_subscription(sub.url, sub.check_interval_minutes),
     }), 201
 
 
@@ -113,7 +146,7 @@ def get_subscription(sub_id):
         "name": sub.name,
         "watch_description": sub.watch_description,
         "check_interval_minutes": sub.check_interval_minutes,
-        "check_interval_label": interval_label(sub.check_interval_minutes),
+        "check_interval_label": interval_label_for_subscription(sub.url, sub.check_interval_minutes),
         "last_checked_at": to_taiwan_iso(sub.last_checked_at),
         "last_changed_at": to_taiwan_iso(sub.last_changed_at),
         "snapshots": [
@@ -151,7 +184,7 @@ def update_subscription(sub_id):
         "name": sub.name,
         "watch_description": sub.watch_description,
         "check_interval_minutes": sub.check_interval_minutes,
-        "check_interval_label": interval_label(sub.check_interval_minutes),
+        "check_interval_label": interval_label_for_subscription(sub.url, sub.check_interval_minutes),
     })
 
 
@@ -269,7 +302,11 @@ def get_diff(sub_id):
     if len(snapshots) < 2:
         return jsonify({"diff_summary": "尚無兩次擷取可比較。", "old_at": None, "new_at": None})
     old_t, new_t = snapshots[1].content_text or "", snapshots[0].content_text or ""
-    summary = diff_to_summary(old_t, new_t)
+    summary = None
+    if is_stdtime_webclock_url(sub.url):
+        summary = stdtime_diff_summary(old_t, new_t)
+    if not summary:
+        summary = diff_to_summary(old_t, new_t)
     return jsonify({
         "diff_summary": summary,
         "old_at": to_taiwan_iso(snapshots[1].captured_at),
@@ -280,21 +317,18 @@ def get_diff(sub_id):
 @subscriptions_bp.route("/notifications", methods=["GET"])
 @login_required
 def list_notifications():
-    # 最多返回10則最新通知
-    notifications = Notification.query.filter_by(user_id=current_user.id).order_by(Notification.created_at.desc()).limit(10).all()
+    # 最多返回 6 則最新通知
+    notifications = (
+        Notification.query
+        .filter_by(user_id=current_user.id)
+        .order_by(Notification.created_at.desc())
+        .limit(NOTIFICATION_PREVIEW_LIMIT)
+        .all()
+    )
     unread_count = Notification.query.filter_by(user_id=current_user.id, is_read=False).count()
     return jsonify({
-        "notifications": [
-            {
-                "id": n.id,
-                "subscription_id": n.subscription_id,
-                "message": n.message,
-                "is_read": n.is_read,
-                "created_at": n.created_at.isoformat() if n.created_at else None,
-            }
-            for n in notifications
-        ],
-        "has_more": Notification.query.filter_by(user_id=current_user.id).count() > 10,
+        "notifications": [serialize_notification(n) for n in notifications],
+        "has_more": Notification.query.filter_by(user_id=current_user.id).count() > NOTIFICATION_PREVIEW_LIMIT,
         "unread_count": unread_count,
     })
 
@@ -305,16 +339,7 @@ def list_all_notifications():
     # 返回所有通知（用於展開功能）
     notifications = Notification.query.filter_by(user_id=current_user.id).order_by(Notification.created_at.desc()).all()
     return jsonify({
-        "notifications": [
-            {
-                "id": n.id,
-                "subscription_id": n.subscription_id,
-                "message": n.message,
-                "is_read": n.is_read,
-                "created_at": n.created_at.isoformat() if n.created_at else None,
-            }
-            for n in notifications
-        ]
+        "notifications": [serialize_notification(n) for n in notifications]
     })
 
 

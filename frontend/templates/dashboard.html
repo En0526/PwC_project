@@ -6,7 +6,7 @@
     <p class="dashboard-desc">新增網址並描述你想「觀看是否有更新」的區塊，系統會定時檢查並在有變更時讓你查看差異。</p>
 
     <div class="dashboard-grid">
-        <aside class="dashboard-aside">
+        <aside class="dashboard-aside dashboard-aside-left">
             <section class="panel panel-compact">
                 <div class="panel-header">
                     <h2>常用清單</h2>
@@ -17,17 +17,6 @@
         </aside>
 
         <div class="dashboard-main">
-            <section class="notifications">
-                <div class="panel-header">
-                    <h2>最新通知 <span id="unread-count" class="unread-badge" style="display:none;"></span></h2>
-                    <div class="notification-actions">
-                        <button id="btn-delete-all-notifications" type="button" class="btn-delete-all-notifications danger">刪除所有通知</button>
-                        <div id="expand-notifications" class="expand-link" style="display:none;">展開全部</div>
-                    </div>
-                </div>
-                <div id="notif-list"></div>
-            </section>
-
             <section class="add-subscription">
                 <h2>新增追蹤</h2>
                 <form id="form-add-sub">
@@ -64,6 +53,19 @@
                 <div id="blocked-list" class="meta">尚無紀錄。</div>
             </section>
         </div>
+
+        <aside class="dashboard-aside dashboard-aside-right">
+            <section class="notifications">
+                <div class="panel-header">
+                    <h2>最新通知 <span id="unread-count" class="unread-badge" style="display:none;"></span></h2>
+                    <div class="notification-actions">
+                        <button id="btn-delete-all-notifications" type="button" class="btn-delete-all-notifications danger">刪除所有通知</button>
+                        <div id="expand-notifications" class="expand-link" style="display:none;">展開全部</div>
+                    </div>
+                </div>
+                <div id="notif-list"></div>
+            </section>
+        </aside>
     </div>
 </div>
 <script src="/static/dashboard.js"></script>

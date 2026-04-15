@@ -5,8 +5,11 @@ import threading
 from backend.models import db, Subscription, Snapshot, Notification
 from backend.services.scraper import scrape_and_extract
 from backend.services.diff_service import diff_to_summary
+from backend.services.stdtime_notify import stdtime_diff_summary
 from backend.services.email_service import send_change_email
 from backend.services.blocked_sites import looks_like_anti_bot, record_blocked_site
+
+STDTIME_CHECK_INTERVAL_SECONDS = 30
 
 
 def _is_meaningful_change(old_content: str, new_content: str) -> bool:
@@ -63,13 +66,17 @@ def run_check_subscription(sub_id: int, app) -> tuple[bool, str | None, bool, bo
         if changed and meaningful_change:
             sub.last_changed_at = now
             diff_summary = diff_to_summary(last.content_text or "", content_text)
+            if _is_stdtime_subscription(sub):
+                readable_summary = stdtime_diff_summary(last.content_text or "", content_text)
+                if readable_summary:
+                    diff_summary = readable_summary
             mail_sent, mail_error = send_change_email(app, sub, diff_summary)
             
             # 創建應用內通知
             notification = Notification(
                 user_id=sub.user_id,
                 subscription_id=sub.id,
-                message=f"您的訂閱 '{sub.name or sub.url}' 有更新：{diff_summary[:200]}..."
+                message=f"您的訂閱 '{sub.name or sub.url}' 有更新：{diff_summary[:1000]}"
             )
             db.session.add(notification)
 
@@ -103,7 +110,7 @@ def run_all_checks(app, stdtime_only: bool = False):
                 continue
 
             if stdtime_only:
-                interval_seconds = 5
+                interval_seconds = STDTIME_CHECK_INTERVAL_SECONDS
                 if not s.last_checked_at:
                     due_ids.append(s.id)
                     continue
@@ -141,7 +148,7 @@ def init_scheduler(app):
         import schedule
         import time
         schedule.every(interval_minutes).minutes.do(job)
-        schedule.every(5).seconds.do(stdtime_job)
+        schedule.every(STDTIME_CHECK_INTERVAL_SECONDS).seconds.do(stdtime_job)
         job()  # 啟動時先跑一次
         while True:
             schedule.run_pending()

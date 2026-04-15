@@ -11,7 +11,12 @@ body { font-family: "Segoe UI", "Microsoft JhengHei", sans-serif; margin: 0; bac
 .site-header a { color: #ecf0f1; text-decoration: none; }
 .site-header a:hover { text-decoration: underline; }
 .user-email { margin-right: 16px; opacity: 0.9; }
-.main-content { max-width: 1100px; margin: 0 auto; padding: 24px; }
+.main-content {
+    width: min(1800px, calc(100vw - 32px));
+    max-width: none;
+    margin: 0 auto;
+    padding: 20px 16px;
+}
 
 .flash-messages { list-style: none; padding: 0; margin: 0 0 16px 0; }
 .flash { padding: 10px 14px; border-radius: 6px; margin-bottom: 8px; }
@@ -39,12 +44,18 @@ body { font-family: "Segoe UI", "Microsoft JhengHei", sans-serif; margin: 0; bac
 
 .dashboard-grid{
     display: grid;
-    grid-template-columns: 320px 1fr;
-    gap: 16px;
+    grid-template-columns: 460px minmax(620px, 1fr) 520px;
+    gap: 24px;
     align-items: start;
 }
 @media (max-width: 900px){
     .dashboard-grid{ grid-template-columns: 1fr; }
+}
+.dashboard-aside-left,
+.dashboard-aside-right {
+    position: sticky;
+    top: 12px;
+    align-self: start;
 }
 
 .panel{
@@ -59,7 +70,7 @@ body { font-family: "Segoe UI", "Microsoft JhengHei", sans-serif; margin: 0; bac
 
 .preset-list{
     margin-top: 10px;
-    max-height: calc(100vh - 260px);
+    max-height: calc(100vh - 180px);
     overflow: auto;
     padding-right: 6px;
 }
@@ -148,22 +159,30 @@ body { font-family: "Segoe UI", "Microsoft JhengHei", sans-serif; margin: 0; bac
 .sub-card .actions button:hover { opacity: 0.9; }
 .diff-box { background: #f9f9f9; padding: 12px; border-radius: 6px; margin-top: 8px; font-size: 13px; white-space: pre-wrap; max-height: 200px; overflow-y: auto; }
 
-.notifications { background: #fff; padding: 24px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); margin-bottom: 24px; }
+.notifications { background: #fff; padding: 16px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); margin-bottom: 0; }
 .notifications h2 { margin-top: 0; }
 .notifications .panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
 .notifications .expand-link { color: #3498db; cursor: pointer; font-size: 14px; text-decoration: underline; }
 .notifications .expand-link:hover { color: #2980b9; }
+#notif-list {
+    max-height: calc(100vh - 180px);
+    overflow-y: auto;
+    padding-right: 6px;
+}
 .notif-card {
     border: 1px solid #eee;
     border-radius: 8px;
-    padding: 16px;
-    margin-bottom: 12px;
+    padding: 12px;
+    margin-bottom: 8px;
     position: relative;
 }
 .notif-card.unread { border-left: 4px solid #e74c3c; background: #fdf2f2; }
 .notif-card.read { border-left: 4px solid #27ae60; background: #f0f9f0; }
-.notif-card .message { font-weight: 500; margin-bottom: 8px; line-height: 1.4; }
-.notif-card .meta { color: #888; font-size: 13px; margin-bottom: 8px; }
+.notif-card .message { font-weight: 500; margin-bottom: 6px; line-height: 1.35; white-space: pre-wrap; }
+.notif-diff { margin: 6px 0 8px 0; padding: 8px; border-radius: 6px; background: #f7f9fc; border: 1px solid #e5eaf2; }
+.notif-diff-title { font-size: 12px; color: #666; margin-bottom: 6px; font-weight: 600; }
+.notif-diff-content { margin: 0; font-size: 12px; line-height: 1.35; white-space: pre-wrap; max-height: 120px; overflow-y: auto; font-family: Consolas, "Courier New", monospace; }
+.notif-card .meta { color: #888; font-size: 12px; margin-bottom: 6px; }
 .notif-card .actions { display: flex; gap: 8px; }
 .notif-card .actions button { padding: 4px 8px; border-radius: 4px; border: 1px solid #ddd; background: #fff; cursor: pointer; font-size: 12px; }
 .notif-card .actions button.btn-mark-read { background: #3498db; color: #fff; border-color: #3498db; }

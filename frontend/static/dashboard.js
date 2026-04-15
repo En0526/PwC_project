@@ -102,10 +102,15 @@
             .then(function (r) { return r.json(); })
             .then(function (data) {
                 var presets = (data && data.presets) ? data.presets : [];
-                if (!presets.length) {
-                    presetEl.innerHTML = '<p class="meta">尚無預設清單。</p>';
-                    return;
-                }
+                presets.push({
+                    id: '__stdtime_test__',
+                    name: '中原標準時間 WebClock 測試',
+                    url: 'https://www.stdtime.gov.tw/home/WebClock',
+                    watch_description: '本機時間（client time）與 server time 測試',
+                    check_interval_minutes: 1,
+                    check_interval_label: '每30秒',
+                    frequency: '測試清單'
+                });
                 syncIntervalOptionsFromPresets(presets);
 
                 // group by frequency
@@ -115,7 +120,7 @@
                     if (!groups[k]) groups[k] = [];
                     groups[k].push(p);
                 });
-                var order = ['每日更新', '動態網站', '不定時更新', '每月更新', '每季更新', '其他'];
+                var order = ['每日更新', '動態網站', '不定時更新', '每月更新', '每季更新', '測試清單', '其他'];
                 var categories = order.filter(function (k) { return groups[k] && groups[k].length; });
                 var activeCategory = categories[0] || null;
 
@@ -147,7 +152,7 @@
                                 '<div class="sub-card preset-card" data-pid="' + escapeHtml(p.id) + '">' +
                                 '<h3>' + escapeHtml(p.name) + '</h3>' +
                                 '<div class="url">' + escapeHtml(p.url) + '</div>' +
-                                '<div class="meta">建議頻率：' + fmtInterval(p.check_interval_minutes) + '</div>' +
+                                '<div class="meta">建議頻率：' + escapeHtml(p.check_interval_label || fmtInterval(p.check_interval_minutes)) + '</div>' +
                                 desc +
                                 '<div class="actions">' +
                                 '<button type="button" class="btn-add primary">一鍵加入</button>' +
@@ -271,6 +276,34 @@
         return div.innerHTML;
     }
 
+    function renderNotificationCard(n) {
+        var created = n.created_at ? new Date(n.created_at).toLocaleString('zh-TW') : '';
+        var className = n.is_read ? 'notif-card read' : 'notif-card unread';
+        var messageText = n.message || '';
+        if (n.diff_summary && messageText.indexOf('有更新：') !== -1) {
+            messageText = messageText.split('有更新：')[0] + '有更新';
+        }
+        var diffHtml = '';
+        if (n.diff_summary) {
+            diffHtml =
+                '<div class="notif-diff">' +
+                '<div class="notif-diff-title">差異摘要</div>' +
+                '<pre class="notif-diff-content">' + escapeHtml(n.diff_summary) + '</pre>' +
+                '</div>';
+        }
+        return (
+            '<div class="' + className + '" data-id="' + n.id + '">' +
+            '<div class="message">' + escapeHtml(messageText) + '</div>' +
+            diffHtml +
+            '<div class="meta">時間：' + created + '</div>' +
+            '<div class="actions">' +
+            (!n.is_read ? '<button type="button" class="btn-mark-read">標記已讀</button>' : '') +
+            '<button type="button" class="btn-delete-notif danger">刪除</button>' +
+            '</div>' +
+            '</div>'
+        );
+    }
+
     function loadNotifications() {
         if (!notifEl) return;
         fetch('/api/subscriptions/notifications', { credentials: 'same-origin' })
@@ -278,7 +311,7 @@
             .then(function (data) {
                 var notifications = (data && data.notifications) ? data.notifications : [];
                 var hasMore = data && data.has_more;
-                
+
                 var unreadBadge = qs('unread-count');
                 if (unreadBadge) {
                     if (data && typeof data.unread_count === 'number' && data.unread_count > 0) {
@@ -288,40 +321,26 @@
                         unreadBadge.style.display = 'none';
                     }
                 }
-                
+
                 if (!notifications.length) {
                     notifEl.innerHTML = '<p class="meta">目前沒有通知。</p>';
                     if (expandLink) expandLink.style.display = 'none';
                     return;
                 }
-                
-                notifEl.innerHTML = notifications.map(function (n) {
-                    var created = n.created_at ? new Date(n.created_at).toLocaleString('zh-TW') : '';
-                    var className = n.is_read ? 'notif-card read' : 'notif-card unread';
-                    return (
-                        '<div class="' + className + '" data-id="' + n.id + '">' +
-                        '<div class="message">' + escapeHtml(n.message) + '</div>' +
-                        '<div class="meta">時間：' + created + '</div>' +
-                        '<div class="actions">' +
-                        (!n.is_read ? '<button type="button" class="btn-mark-read">標記已讀</button>' : '') +
-                        '<button type="button" class="btn-delete-notif danger">刪除</button>' +
-                        '</div>' +
-                        '</div>'
-                    );
-                }).join('');
-                
+
+                notifEl.innerHTML = notifications.map(renderNotificationCard).join('');
+
                 if (expandLink) {
                     expandLink.style.display = hasMore ? 'block' : 'none';
                 }
-                
-                // 添加事件監聽器
+
                 notifEl.querySelectorAll('.btn-mark-read').forEach(function (btn) {
                     btn.addEventListener('click', function () {
                         var id = parseInt(btn.closest('.notif-card').dataset.id, 10);
                         markNotificationRead(id, btn.closest('.notif-card'));
                     });
                 });
-                
+
                 notifEl.querySelectorAll('.btn-delete-notif').forEach(function (btn) {
                     btn.addEventListener('click', function () {
                         var id = parseInt(btn.closest('.notif-card').dataset.id, 10);
@@ -340,44 +359,30 @@
             .then(function (r) { return r.json(); })
             .then(function (data) {
                 var notifications = (data && data.notifications) ? data.notifications : [];
-                
+
                 if (!notifications.length) {
                     notifEl.innerHTML = '<p class="meta">目前沒有通知。</p>';
                     return;
                 }
-                
-                notifEl.innerHTML = notifications.map(function (n) {
-                    var created = n.created_at ? new Date(n.created_at).toLocaleString('zh-TW') : '';
-                    var className = n.is_read ? 'notif-card read' : 'notif-card unread';
-                    return (
-                        '<div class="' + className + '" data-id="' + n.id + '">' +
-                        '<div class="message">' + escapeHtml(n.message) + '</div>' +
-                        '<div class="meta">時間：' + created + '</div>' +
-                        '<div class="actions">' +
-                        (!n.is_read ? '<button type="button" class="btn-mark-read">標記已讀</button>' : '') +
-                        '<button type="button" class="btn-delete-notif danger">刪除</button>' +
-                        '</div>' +
-                        '</div>'
-                    );
-                }).join('');
-                
+
+                notifEl.innerHTML = notifications.map(renderNotificationCard).join('');
+
                 if (expandLink) {
-                    expandLink.style.display = 'none'; // 已經展開了
+                    expandLink.style.display = 'none';
                     expandLink.textContent = '收起';
-                    expandLink.addEventListener('click', function() {
-                        loadNotifications(); // 重新載入前10則
+                    expandLink.addEventListener('click', function () {
+                        loadNotifications();
                         expandLink.textContent = '展開全部';
                     });
                 }
-                
-                // 添加事件監聽器
+
                 notifEl.querySelectorAll('.btn-mark-read').forEach(function (btn) {
                     btn.addEventListener('click', function () {
                         var id = parseInt(btn.closest('.notif-card').dataset.id, 10);
                         markNotificationRead(id, btn.closest('.notif-card'));
                     });
                 });
-                
+
                 notifEl.querySelectorAll('.btn-delete-notif').forEach(function (btn) {
                     btn.addEventListener('click', function () {
                         var id = parseInt(btn.closest('.notif-card').dataset.id, 10);
@@ -409,7 +414,7 @@
 
     function deleteNotification(id, cardEl) {
         if (!confirm('確定要刪除此通知？')) return;
-        
+
         fetch('/api/subscriptions/notifications/' + id, {
             method: 'DELETE',
             credentials: 'same-origin'
@@ -417,7 +422,6 @@
             .then(function (r) { return r.json(); })
             .then(function () {
                 cardEl.remove();
-                // 如果沒有通知了，重新載入
                 if (notifEl.children.length === 0) {
                     loadNotifications();
                 }
@@ -429,7 +433,7 @@
 
     function deleteAllNotifications() {
         if (!confirm('確定要刪除所有通知嗎？此動作無法復原。')) return;
-        
+
         fetch('/api/subscriptions/notifications/all', {
             method: 'DELETE',
             credentials: 'same-origin'
@@ -533,53 +537,6 @@
             .catch(function () { alert('刪除失敗'); });
     }
 
-        form.addEventListener('submit', function (e) {
-        e.preventDefault();
-        var url = document.getElementById('sub-url').value.trim();
-        var name = document.getElementById('sub-name').value.trim() || null;
-        var watch = document.getElementById('sub-watch').value.trim() || null;
-        var intervalVal = document.getElementById('sub-interval').value;
-        var interval = 1440;
-        if (intervalVal === 'custom') {
-            var customVal = intervalCustomInput ? intervalCustomInput.value.trim() : '';
-            interval = customVal ? parseInt(customVal, 10) : NaN;
-            if (!Number.isFinite(interval) || interval <= 0) {
-                alert('請輸入有效的自訂分鐘數（需大於 0）。');
-                return;
-            }
-        } else {
-            interval = intervalVal ? parseInt(intervalVal, 10) : 1440;
-        }
-        fetch('/api/subscriptions', {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url: url, name: name, watch_description: watch, check_interval_minutes: interval })
-        })
-            .then(function (r) {
-                if (r.ok || r.status === 201) {
-                    console.log('新增訂閱成功', r.status);
-                    alert('新增訂閱成功！');
-                    document.getElementById('sub-url').value = '';
-                    document.getElementById('sub-name').value = '';
-                    document.getElementById('sub-watch').value = '';
-                    document.getElementById('sub-interval').value = '1440';
-                    if (intervalCustomInput) intervalCustomInput.value = '';
-                    toggleCustomIntervalInput();
-                    loadSubscriptions();
-                } else {
-                    return r.json().then(function (d) {
-                        console.error('新增訂閱錯誤', d);
-                        alert('新增失敗: ' + (d.error || '伺服器回應非預期'));
-                    });
-                }
-            })
-            .catch(function (err) {
-                console.error('新增訂閱時網路或 JS 錯誤', err);
-                alert('新增失敗：網路或系統錯誤，請開 F12 看 Console');
-            });
-    });
-
     function checkAll() {
         var btn = qs('btn-check-all');
         if (btn) {
@@ -629,6 +586,57 @@
             });
     }
 
+        form.addEventListener('submit', function (e) {
+        e.preventDefault();
+        var url = document.getElementById('sub-url').value.trim();
+        var name = document.getElementById('sub-name').value.trim() || null;
+        var watch = document.getElementById('sub-watch').value.trim() || null;
+        var intervalVal = document.getElementById('sub-interval').value;
+        var interval = 1440;
+        if (intervalVal === 'custom') {
+            var customVal = intervalCustomInput ? intervalCustomInput.value.trim() : '';
+            interval = customVal ? parseInt(customVal, 10) : NaN;
+            if (!Number.isFinite(interval) || interval <= 0) {
+                alert('請輸入有效的自訂分鐘數（需大於 0）。');
+                return;
+            }
+        } else {
+            interval = intervalVal ? parseInt(intervalVal, 10) : 1440;
+        }
+        fetch('/api/subscriptions', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: url, name: name, watch_description: watch, check_interval_minutes: interval })
+        })
+            .then(function (r) {
+                if (r.ok || r.status === 201) {
+                    console.log('新增訂閱成功', r.status);
+                    alert('新增訂閱成功！');
+                    document.getElementById('sub-url').value = '';
+                    document.getElementById('sub-name').value = '';
+                    document.getElementById('sub-watch').value = '';
+                    document.getElementById('sub-interval').value = '1440';
+                    if (intervalCustomInput) intervalCustomInput.value = '';
+                    toggleCustomIntervalInput();
+                    loadSubscriptions();
+                } else {
+                    return r.json().then(function (d) {
+                        console.error('新增訂閱錯誤', d);
+                        alert('新增失敗: ' + (d.error || '伺服器回應非預期'));
+                    });
+                }
+            })
+            .catch(function (err) {
+                console.error('新增訂閱時網路或 JS 錯誤', err);
+                alert('新增失敗：網路或系統錯誤，請開 F12 看 Console');
+            });
+    });
+
+    loadSubscriptions();
+    loadPresets();
+    loadBlockedSites();
+    loadNotifications();
     var checkAllBtn = qs('btn-check-all');
     if (checkAllBtn) {
         checkAllBtn.addEventListener('click', checkAll);
@@ -637,27 +645,12 @@
     if (deleteAllBtn) {
         deleteAllBtn.addEventListener('click', deleteAll);
     }
-
-    loadSubscriptions();
-    loadPresets();
-    loadBlockedSites();
-    loadNotifications();
-    if (intervalSelect) {
-        intervalSelect.addEventListener('change', toggleCustomIntervalInput);
-    }
-    toggleCustomIntervalInput();
-    setInterval(loadSubscriptions, 10000);
-    setInterval(loadNotifications, 30000); // 每30秒檢查新通知
-    
-    // 刪除所有通知事件
     var deleteAllNotifBtn = qs('btn-delete-all-notifications');
     if (deleteAllNotifBtn) {
         deleteAllNotifBtn.addEventListener('click', deleteAllNotifications);
     }
-    
-    // 展開通知事件
     if (expandLink) {
-        expandLink.addEventListener('click', function() {
+        expandLink.addEventListener('click', function () {
             if (expandLink.textContent === '展開全部') {
                 loadAllNotifications();
             } else {
@@ -666,6 +659,12 @@
             }
         });
     }
+    if (intervalSelect) {
+        intervalSelect.addEventListener('change', toggleCustomIntervalInput);
+    }
+    toggleCustomIntervalInput();
+    setInterval(loadSubscriptions, 10000);
+    setInterval(loadNotifications, 30000);
     }
 
     if (document.readyState === 'loading') {
