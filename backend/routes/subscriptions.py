@@ -52,6 +52,15 @@ def interval_label_for_subscription(url, minutes):
     return interval_label(minutes)
 
 
+def parse_source_label(content_full):
+    raw = (content_full or "").strip().lower()
+    if raw.startswith("source:rss"):
+        return "RSS"
+    if raw.startswith("source:web"):
+        return "爬蟲"
+    return None
+
+
 def serialize_notification(n, diff_cache=None):
     message = n.message or ""
     diff_summary = None
@@ -93,6 +102,7 @@ def list_subscriptions():
                 "last_checked_at": to_taiwan_iso(s.last_checked_at),
                 "last_changed_at": to_taiwan_iso(s.last_changed_at),
                 "created_at": to_taiwan_iso(s.created_at),
+                "last_check_source": parse_source_label(s.snapshots[0].content_full) if s.snapshots else None,
             }
             for s in subs
         ]
@@ -241,6 +251,7 @@ def check_now(sub_id):
         "mail_error": mail_error,
         "last_checked_at": to_taiwan_iso(sub.last_checked_at),
         "last_changed_at": to_taiwan_iso(sub.last_changed_at),
+        "source": parse_source_label(sub.snapshots[0].content_full) if sub and sub.snapshots else None,
     })
 
 
@@ -332,6 +343,7 @@ def get_diff(sub_id):
         "diff_summary": summary,
         "old_at": to_taiwan_iso(snapshots[1].captured_at),
         "new_at": to_taiwan_iso(snapshots[0].captured_at),
+        "source": parse_source_label(snapshots[0].content_full),
     })
 
 

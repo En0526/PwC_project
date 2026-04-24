@@ -10,6 +10,8 @@ class Config:
     SQLALCHEMY_DATABASE_URI = os.environ.get("DATABASE_URL") or "sqlite:///site.db"
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") or ""
+    AI_SUMMARY_ENABLED = (os.environ.get("AI_SUMMARY_ENABLED") or "0").strip() in ("1", "true", "True", "yes", "YES")
+    AI_SUMMARY_MODEL = os.environ.get("AI_SUMMARY_MODEL") or "gemini-1.5-flash"
     CHECK_INTERVAL_MINUTES = int(os.environ.get("CHECK_INTERVAL_MINUTES") or "30")
 
     # Email notifications (optional)

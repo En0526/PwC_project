@@ -6,6 +6,7 @@ from backend.models import db, Subscription, Snapshot, Notification
 from backend.services.scraper import scrape_and_extract
 from backend.services.diff_service import diff_to_summary
 from backend.services.stdtime_notify import stdtime_diff_summary
+from backend.services.ai_summary_service import generate_diff_summary
 from backend.services.email_service import send_change_email
 from backend.services.blocked_sites import looks_like_anti_bot, record_blocked_site
 
@@ -37,7 +38,7 @@ def run_check_subscription(sub_id: int, app) -> tuple[bool, str | None, bool, bo
             return False, "找不到訂閱", False, None, None
         now = datetime.utcnow()
         try:
-            content_text, new_hash = scrape_and_extract(
+            content_text, new_hash, source_type = scrape_and_extract(
                 sub.url,
                 sub.watch_description,
                 use_gemini=bool(app.config.get("GEMINI_API_KEY")),
@@ -70,13 +71,23 @@ def run_check_subscription(sub_id: int, app) -> tuple[bool, str | None, bool, bo
                 readable_summary = stdtime_diff_summary(last.content_text or "", content_text)
                 if readable_summary:
                     diff_summary = readable_summary
-            mail_sent, mail_error = send_change_email(app, sub, diff_summary)
+            ai_summary = generate_diff_summary(
+                site_name=sub.name or sub.url,
+                url=sub.url,
+                source_type=source_type,
+                raw_diff_summary=diff_summary,
+                api_key=app.config.get("GEMINI_API_KEY", ""),
+                model_name=app.config.get("AI_SUMMARY_MODEL", "gemini-1.5-flash"),
+            )
+            final_summary = ai_summary or diff_summary
+
+            mail_sent, mail_error = send_change_email(app, sub, final_summary)
             
             # 創建應用內通知
             notification = Notification(
                 user_id=sub.user_id,
                 subscription_id=sub.id,
-                message=f"您的訂閱 '{sub.name or sub.url}' 有更新：{diff_summary[:1000]}"
+                message=f"[{source_type.upper()}] 您的訂閱 '{sub.name or sub.url}' 有更新：{final_summary[:1000]}"
             )
             db.session.add(notification)
 
@@ -84,7 +95,7 @@ def run_check_subscription(sub_id: int, app) -> tuple[bool, str | None, bool, bo
             subscription_id=sub.id,
             content_hash=new_hash,
             content_text=content_text[:50000],
-            content_full=None,
+            content_full=f"source:{source_type}",
         )
         db.session.add(snapshot)
 

@@ -46,12 +46,13 @@
                 listEl.innerHTML = data.subscriptions.map(function (s) {
                     var lastCheck = s.last_checked_at ? new Date(s.last_checked_at).toLocaleString('zh-TW') : '尚未檢查';
                     var lastChange = s.last_changed_at ? new Date(s.last_changed_at).toLocaleString('zh-TW') : '-';
+                    var sourceLabel = s.last_check_source ? ('　來源：' + escapeHtml(s.last_check_source)) : '';
                     return (
                         '<div class="sub-card" data-id="' + s.id + '">' +
                         '<h3>' + (s.name || '未命名') + '</h3>' +
                         '<div class="url">' + escapeHtml(s.url) + '</div>' +
                         (s.watch_description ? '<div class="meta">關注：' + escapeHtml(s.watch_description.slice(0, 80)) + (s.watch_description.length > 80 ? '…' : '') + '</div>' : '') +
-                        '<div class="meta">頻率：' + escapeHtml(s.check_interval_label || fmtInterval(s.check_interval_minutes || 30)) + '　上次檢查：' + lastCheck + '　有變更：' + lastChange + '</div>' +
+                        '<div class="meta">頻率：' + escapeHtml(s.check_interval_label || fmtInterval(s.check_interval_minutes || 30)) + '　上次檢查：' + lastCheck + '　有變更：' + lastChange + sourceLabel + '</div>' +
                         '<div class="actions">' +
                         '<button type="button" class="btn-check primary">立即檢查</button>' +
                         '<button type="button" class="btn-diff">看差異</button>' +
@@ -527,7 +528,8 @@
         fetch('/api/subscriptions/' + id + '/diff', { credentials: 'same-origin' })
             .then(function (r) { return r.json(); })
             .then(function (data) {
-                boxEl.textContent = data.diff_summary || '尚無差異可顯示。';
+                var sourcePrefix = data && data.source ? ('來源：' + data.source + '\n\n') : '';
+                boxEl.textContent = sourcePrefix + (data.diff_summary || '尚無差異可顯示。');
                 if (data.old_at && data.new_at) {
                     boxEl.textContent += '\n\n（' + data.old_at + ' → ' + data.new_at + '）';
                 }
