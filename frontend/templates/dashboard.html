@@ -37,6 +37,31 @@
                     </label>
                     <button type="submit">新增</button>
                 </form>
+
+                <hr style="margin: 24px 0; border: none; border-top: 1px solid #ddd;">
+
+                <h3>🔗 RSS 功能</h3>
+                <p style="font-size: 0.9em; color: #666; margin-bottom: 12px;">快速檢測和驗證 RSS feed，或從網站頁面自動發現 RSS 來源。</p>
+
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px;">
+                    <div>
+                        <label>檢測此頁面的 RSS feed
+                            <input type="url" id="rss-detect-url" placeholder="https://example.com" style="width: 100%; margin-top: 6px;">
+                        </label>
+                        <button type="button" id="btn-detect-rss" class="btn-detect-rss" style="width: 100%; margin-top: 8px;">🔍 偵測 RSS</button>
+                    </div>
+
+                    <div>
+                        <label>驗證 RSS feed 有效性
+                            <input type="url" id="rss-validate-url" placeholder="https://example.com/feed.xml" style="width: 100%; margin-top: 6px;">
+                        </label>
+                        <button type="button" id="btn-validate-rss" class="btn-validate-rss" style="width: 100%; margin-top: 8px;">✓ 驗證</button>
+                    </div>
+                </div>
+
+                <div id="rss-result" style="display: none; padding: 12px; background: #f5f5f5; border-radius: 4px; margin-bottom: 12px;">
+                    <div id="rss-result-content"></div>
+                </div>
             </section>
 
             <section class="subscription-list">

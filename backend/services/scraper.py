@@ -4,7 +4,9 @@ import os
 import re
 import ssl
 import warnings
+import xml.etree.ElementTree as ET
 from urllib.parse import urlparse, urlunparse
+
 import requests
 from bs4 import BeautifulSoup
 
@@ -19,6 +21,342 @@ DEFAULT_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
 }
+
+
+class ScrapeFailure(RuntimeError):
+    def __init__(self, code: str, message: str, hint: str = "", retryable: bool = True, http_status: int | None = None):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.hint = hint
+        self.retryable = retryable
+        self.http_status = http_status
+
+
+def _url_expects_rss(url: str) -> bool:
+    """判斷 URL 是否看起來應該提供 RSS/Atom feed（基於 URL 路徑）。"""
+    u = (url or "").lower()
+    return any(k in u for k in ("/feed", "/rss", "/atom", ".xml"))
+
+
+def _is_probably_rss(url: str, content_type: str, body: str) -> bool:
+    u = (url or "").lower()
+    ct = (content_type or "").lower()
+    head = (body or "")[:300].lstrip().lower()
+    if any(k in u for k in ("/feed", "/rss", "/atom", ".xml")):
+        return True
+    if any(k in ct for k in ("application/rss+xml", "application/atom+xml", "application/xml", "text/xml")):
+        return True
+    return head.startswith("<?xml") and ("<rss" in head or "<feed" in head)
+
+
+def _rss_entry_text(entry: dict) -> str:
+    title = (entry.get("title") or "").strip()
+    link = (entry.get("link") or "").strip()
+    guid = (entry.get("guid") or "").strip()
+    date = (entry.get("date") or "").strip()
+    parts = [x for x in (guid, title, date, link) if x]
+    return " | ".join(parts)
+
+
+def detect_rss_feeds(html: str, base_url: str = "") -> list[dict]:
+    """從 HTML 中檢測 RSS/Atom feed 鏈接。
+    
+    返回: [{"url": "...", "title": "...", "type": "rss|atom"}]
+    """
+    feeds = []
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        
+        # 查找 <link rel="alternate"> 標籤
+        for link_tag in soup.find_all("link", rel="alternate"):
+            link_type = (link_tag.get("type") or "").lower()
+            href = (link_tag.get("href") or "").strip()
+            title = (link_tag.get("title") or "").strip()
+            
+            # 檢查是否為 RSS 或 Atom 類型
+            is_rss = "rss" in link_type or "application/rss" in link_type
+            is_atom = "atom" in link_type or "application/atom" in link_type
+            
+            if (is_rss or is_atom) and href:
+                # 如果 href 是相對 URL，轉為絕對 URL
+                if base_url and not href.startswith("http"):
+                    from urllib.parse import urljoin
+                    href = urljoin(base_url, href)
+                
+                feed_type = "atom" if is_atom else "rss"
+                feeds.append({
+                    "url": href,
+                    "title": title or f"{feed_type.upper()} Feed",
+                    "type": feed_type,
+                })
+        
+        # 也查找常見的 RSS URL 模式（作為後備）
+        if not feeds:
+            common_patterns = [
+                "/feed", "/rss", "/atom", "/feeds", 
+                "/feed.xml", "/rss.xml", "/atom.xml"
+            ]
+            base_domain = base_url.rsplit("/", 1)[0] if base_url else ""
+            for pattern in common_patterns:
+                candidate_url = base_domain + pattern if base_domain else None
+                if candidate_url:
+                    feeds.append({
+                        "url": candidate_url,
+                        "title": f"RSS Feed ({pattern})",
+                        "type": "rss",
+                        "is_guess": True,  # 標記為推測，不確定
+                    })
+        
+        return feeds
+    except Exception as e:
+        return []
+
+
+def validate_rss_feed(url: str, timeout: int = 10) -> dict:
+    """驗證 URL 是否提供有效的 RSS/Atom feed。
+    
+    返回: {
+        "valid": bool,
+        "type": "rss" | "atom" | None,
+        "items_count": int,
+        "title": str,
+        "message": str
+    }
+    """
+    try:
+        html, content_type = fetch_page_detailed(url, timeout=timeout)
+        
+        if _is_probably_rss(url, content_type, html):
+            try:
+                # 嘗試解析 RSS
+                root = ET.fromstring(html)
+                root_name = _strip_ns(root.tag).lower()
+                
+                # 判斷類型
+                feed_type = None
+                item_count = 0
+                title = ""
+                
+                if root_name in ("rss", "rdf"):
+                    feed_type = "rss"
+                    items = root.findall(".//item")
+                    item_count = len(items)
+                    title_el = root.find(".//title")
+                    if title_el is not None:
+                        title = (title_el.text or "").strip()
+                
+                elif root_name == "feed":
+                    feed_type = "atom"
+                    ns = {"a": "http://www.w3.org/2005/Atom"}
+                    entries = root.findall("a:entry", ns)
+                    item_count = len(entries)
+                    title_el = root.find("a:title", ns)
+                    if title_el is not None:
+                        title = (title_el.text or "").strip()
+                
+                if feed_type:
+                    return {
+                        "valid": True,
+                        "type": feed_type,
+                        "items_count": item_count,
+                        "title": title,
+                        "message": f"✓ 有效的 {feed_type.upper()} feed，包含 {item_count} 項"
+                    }
+            except ET.ParseError:
+                pass
+        
+        # 不是 RSS 或解析失敗
+        return {
+            "valid": False,
+            "type": None,
+            "items_count": 0,
+            "title": "",
+            "message": "✗ 此 URL 不提供有效的 RSS/Atom feed"
+        }
+    
+    except ScrapeFailure as e:
+        return {
+            "valid": False,
+            "type": None,
+            "items_count": 0,
+            "title": "",
+            "message": f"✗ 無法連線：{e.hint}"
+        }
+    except Exception as e:
+        return {
+            "valid": False,
+            "type": None,
+            "items_count": 0,
+            "title": "",
+            "message": f"✗ 驗證失敗：{str(e)}"
+        }
+
+
+def _rss_entry_text(entry: dict) -> str:
+    title = (entry.get("title") or "").strip()
+    link = (entry.get("link") or "").strip()
+    guid = (entry.get("guid") or "").strip()
+    date = (entry.get("date") or "").strip()
+    parts = [x for x in (guid, title, date, link) if x]
+    return " | ".join(parts)
+
+
+def _strip_ns(tag: str) -> str:
+    if "}" in tag:
+        return tag.split("}", 1)[1]
+    return tag
+
+
+def parse_rss_snapshot(xml_text: str, max_items: int = 20) -> str:
+    """將 RSS / Atom 轉為穩定文字快照，避免誤判。"""
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError as e:
+        raise ScrapeFailure(
+            code="rss_parse_failed",
+            message=f"RSS 解析失敗: {e}",
+            hint="此連結不是有效 RSS/Atom，請改用網站的正式 feed URL。",
+            retryable=False,
+        )
+
+    root_name = _strip_ns(root.tag).lower()
+    entries: list[dict] = []
+
+    if root_name in ("rss", "rdf"):
+        for item in root.findall(".//item")[:max_items]:
+            entries.append(
+                {
+                    "title": (item.findtext("title") or "").strip(),
+                    "link": (item.findtext("link") or "").strip(),
+                    "guid": (item.findtext("guid") or "").strip(),
+                    "date": (item.findtext("pubDate") or item.findtext("updated") or "").strip(),
+                }
+            )
+    elif root_name == "feed":
+        ns = {"a": "http://www.w3.org/2005/Atom"}
+        atom_entries = root.findall("a:entry", ns)
+        for item in atom_entries[:max_items]:
+            link_el = item.find("a:link", ns)
+            link = ""
+            if link_el is not None:
+                link = (link_el.attrib.get("href") or "").strip()
+            entries.append(
+                {
+                    "title": (item.findtext("a:title", default="", namespaces=ns) or "").strip(),
+                    "link": link,
+                    "guid": (item.findtext("a:id", default="", namespaces=ns) or "").strip(),
+                    "date": (
+                        item.findtext("a:updated", default="", namespaces=ns)
+                        or item.findtext("a:published", default="", namespaces=ns)
+                        or ""
+                    ).strip(),
+                }
+            )
+    else:
+        raise ScrapeFailure(
+            code="rss_parse_failed",
+            message="內容看起來是 XML，但不是 RSS/Atom 格式。",
+            hint="請確認 feed 連結是否正確，或改用一般網頁監測。",
+            retryable=False,
+        )
+
+    lines = [_rss_entry_text(entry) for entry in entries if _rss_entry_text(entry)]
+    if not lines:
+        raise ScrapeFailure(
+            code="rss_parse_failed",
+            message="RSS 解析成功但找不到 item/entry。",
+            hint="此 feed 可能無資料或格式特殊，請改用其他來源。",
+            retryable=False,
+        )
+    return "\n".join(lines)
+
+
+def _looks_dynamic_unreadable(html: str, text: str) -> bool:
+    low_text = len((text or "").strip()) < 120
+    h = (html or "").lower()
+    dynamic_signals = [
+        "enable javascript",
+        "please enable javascript",
+        "__next_data__",
+        "id=\"__next\"",
+        "data-reactroot",
+        "hydration",
+        "webpack",
+    ]
+    score = sum(1 for k in dynamic_signals if k in h)
+    return low_text and score >= 2
+
+
+def _classify_request_exception(e: requests.RequestException, url: str, used_insecure_ssl: bool = False) -> ScrapeFailure:
+    if isinstance(e, requests.Timeout):
+        return ScrapeFailure(
+            code="timeout",
+            message=f"連線逾時: {e}",
+            hint="網站回應過慢，建議稍後重試或拉長 timeout。",
+            retryable=True,
+        )
+
+    if isinstance(e, requests.HTTPError):
+        status = e.response.status_code if e.response is not None else None
+        if status == 403:
+            return ScrapeFailure(
+                code="http_403",
+                message=f"網站拒絕存取 (HTTP 403): {url}",
+                hint="目標站可能啟用反爬機制，建議改用 RSS 或瀏覽器模式。",
+                retryable=False,
+                http_status=status,
+            )
+        if status == 429:
+            return ScrapeFailure(
+                code="http_429",
+                message=f"請求過於頻繁 (HTTP 429): {url}",
+                hint="請降低檢查頻率，避免被限制。",
+                retryable=True,
+                http_status=status,
+            )
+        if status is not None and status >= 500:
+            return ScrapeFailure(
+                code="http_5xx",
+                message=f"伺服器錯誤 (HTTP {status}): {url}",
+                hint="網站端暫時異常，稍後重試。",
+                retryable=True,
+                http_status=status,
+            )
+        return ScrapeFailure(
+            code="http_error",
+            message=f"HTTP 錯誤 ({status}): {url}",
+            hint="請檢查網址是否可公開存取。",
+            retryable=False,
+            http_status=status,
+        )
+
+    is_ssl_error = isinstance(getattr(e, "reason", None), ssl.SSLError) or "CERTIFICATE_VERIFY_FAILED" in str(e)
+    if is_ssl_error:
+        hint = "網站憑證異常。"
+        if used_insecure_ssl:
+            hint += " 已嘗試 SSL 寬鬆模式仍失敗。"
+        return ScrapeFailure(
+            code="ssl_error",
+            message=f"SSL 憑證錯誤: {e}",
+            hint=hint,
+            retryable=False,
+        )
+
+    if isinstance(e, requests.ConnectionError):
+        return ScrapeFailure(
+            code="connection_error",
+            message=f"連線失敗: {e}",
+            hint="無法建立連線，請檢查網路或目標網站狀態。",
+            retryable=True,
+        )
+
+    return ScrapeFailure(
+        code="request_error",
+        message=f"請求失敗: {e}",
+        hint="請稍後重試。",
+        retryable=True,
+    )
 
 
 def _get_insecure_ssl_domains() -> set[str]:
@@ -48,12 +386,21 @@ def _is_insecure_ssl_allowed(url: str) -> bool:
 
 def fetch_page(url: str, timeout: int = 20) -> tuple[str | None, str | None]:
     """取得網頁 HTML，回傳 (html_text, error_message)。"""
+    try:
+        html_text, _ = fetch_page_detailed(url, timeout=timeout)
+        return html_text, None
+    except ScrapeFailure as e:
+        return None, str(e)
+
+
+def fetch_page_detailed(url: str, timeout: int = 20) -> tuple[str, str]:
+    """取得網頁內容與 content-type，失敗時丟 ScrapeFailure。"""
     normalized_url = normalize_url(url)
     try:
         r = requests.get(normalized_url, headers=DEFAULT_HEADERS, timeout=timeout)
         r.raise_for_status()
         r.encoding = r.apparent_encoding or "utf-8"
-        return r.text, None
+        return r.text, (r.headers.get("Content-Type") or "")
     except requests.RequestException as e:
         # 只對白名單網域做 SSL 寬鬆模式 fallback，其他網站仍維持嚴格驗證
         is_ssl_error = isinstance(getattr(e, "reason", None), ssl.SSLError) or "CERTIFICATE_VERIFY_FAILED" in str(e)
@@ -64,10 +411,10 @@ def fetch_page(url: str, timeout: int = 20) -> tuple[str | None, str | None]:
                     r = requests.get(normalized_url, headers=DEFAULT_HEADERS, timeout=timeout, verify=False)
                 r.raise_for_status()
                 r.encoding = r.apparent_encoding or "utf-8"
-                return r.text, None
+                return r.text, (r.headers.get("Content-Type") or "")
             except requests.RequestException as e2:
-                return None, f"{e2}（已嘗試 SSL 寬鬆模式）"
-        return None, str(e)
+                raise _classify_request_exception(e2, normalized_url, used_insecure_ssl=True) from e2
+        raise _classify_request_exception(e, normalized_url, used_insecure_ssl=False) from e
 
 
 def normalize_url(url: str) -> str:
@@ -122,27 +469,88 @@ def scrape_and_extract(
     watch_description: str | None,
     use_gemini: bool = True,
     gemini_api_key: str = "",
-) -> tuple[str, str]:
+) -> tuple[str, str, dict]:
     """
     擷取網頁並依使用者描述取出「要觀看」的內容。
     若 watch_description 為空則回傳整頁純文字。
-    回傳 (content_text, content_hash)。
+    回傳 (content_text, content_hash, diagnostic_info)。
+    
+    診斷代碼區分：
+      - http_403 / http_429 / http_error / timeout: 反爬/網路錯誤
+      - rss_not_found: URL 看起來是 RSS，但伺服器返回非 RSS 內容
+      - rss_fetch_failed: URL 看起來是 RSS，但 fetch 失敗
+      - html_dynamic_unreadable: 返回 HTML 但需要 JS 渲染
+      - ok: 成功取得內容
     """
-    html, err = fetch_page(url)
-    if err:
-        raise RuntimeError(f"無法取得網頁: {err}")
-
-    full_text = html_to_clean_text(html)
-
     # 先嘗試特殊網站的文字擷取，避免 JS 動態內容導致抓不到差異
     st_text = scrape_stdtime_clock(url, watch_description)
     if st_text:
         h = content_hash(st_text)
-        return st_text, h
+        return st_text, h, {"status": "ok", "source": "stdtime", "confidence": 1.0, "hint": ""}
+
+    url_expects_rss = _url_expects_rss(url)
+
+    try:
+        html, content_type = fetch_page_detailed(url)
+    except ScrapeFailure as e:
+        # fetch 失敗：判斷是否期望 RSS
+        if url_expects_rss:
+            # URL 看起來像 RSS，但 fetch 失敗
+            if e.code in ("http_403", "http_429"):
+                raise ScrapeFailure(
+                    code="rss_fetch_failed_blocked",
+                    message=f"無法取得 RSS feed：{e.message}",
+                    hint="此 RSS 源被網站反爬阻擋（403/429），建議更換 feed 來源或稍後重試。",
+                    retryable=True,
+                    http_status=e.http_status,
+                ) from e
+            elif e.code == "timeout":
+                raise ScrapeFailure(
+                    code="rss_fetch_failed_timeout",
+                    message=f"無法取得 RSS feed：連線逾時",
+                    hint="RSS 源伺服器回應太慢，建議稍後重試。",
+                    retryable=True,
+                ) from e
+            else:
+                raise ScrapeFailure(
+                    code="rss_fetch_failed",
+                    message=f"無法取得 RSS feed：{e.message}",
+                    hint="無法連線到 RSS 源，請檢查 feed URL 是否正確、網站是否下線。",
+                    retryable=True,
+                ) from e
+        else:
+            # URL 不是 RSS，直接丟出原異常
+            raise e
+
+    # fetch 成功，檢查內容格式
+    if _is_probably_rss(url, content_type, html):
+        # 內容看起來像 RSS，解析之
+        rss_text = parse_rss_snapshot(html)
+        h = content_hash(rss_text)
+        return rss_text, h, {"status": "ok", "source": "rss", "confidence": 0.95, "hint": ""}
+    elif url_expects_rss:
+        # URL 看起來像 RSS，但伺服器返回非 RSS 內容（例如 HTML 登入頁、403 頁面等）
+        raise ScrapeFailure(
+            code="rss_not_found",
+            message=f"指定的 RSS 源返回非 RSS 內容（Content-Type: {content_type})。",
+            hint="此連結不提供 RSS feed（可能是登入頁、錯誤頁等）。請改用其他 RSS 源，或改為監測網站的一般 HTML 頁面。",
+            retryable=False,
+        )
+
+    # 內容是 HTML，轉為文本
+    full_text = html_to_clean_text(html)
+
+    if _looks_dynamic_unreadable(html, full_text):
+        raise ScrapeFailure(
+            code="html_dynamic_unreadable",
+            message="此網站主要內容由 JavaScript 動態載入，無法穩定判讀。",
+            hint="建議改用 RSS，或改成瀏覽器渲染模式（Playwright）後再監測。",
+            retryable=False,
+        )
 
     if not watch_description or not watch_description.strip():
         h = content_hash(full_text)
-        return full_text, h
+        return full_text, h, {"status": "ok", "source": "html", "confidence": 0.8, "hint": ""}
 
     if use_gemini and gemini_api_key:
         try:
@@ -154,10 +562,15 @@ def scrape_and_extract(
             )
             if extracted:
                 h = content_hash(extracted)
-                return extracted, h
+                return extracted, h, {"status": "ok", "source": "gemini", "confidence": 0.85, "hint": ""}
         except Exception:
             pass  # 失敗時 fallback 到全文
 
     # 無 AI 或失敗：回傳全文
     h = content_hash(full_text)
-    return full_text, h
+    return full_text, h, {
+        "status": "ok",
+        "source": "html_fallback",
+        "confidence": 0.65,
+        "hint": "AI 區塊擷取失敗，已改用整頁內容比對。",
+    }

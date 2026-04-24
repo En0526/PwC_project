@@ -227,7 +227,7 @@ def check_now(sub_id):
     if not sub:
         return jsonify({"error": "找不到此訂閱"}), 404
     before_changed_at = sub.last_changed_at
-    ok, err, changed_internal, mail_sent, mail_error = run_check_subscription(sub_id, current_app)
+    ok, err, changed_internal, mail_sent, mail_error, diagnostic = run_check_subscription(sub_id, current_app)
     sub = Subscription.query.get(sub_id)
     changed_this_check = False
     if ok and sub and sub.last_changed_at:
@@ -239,6 +239,11 @@ def check_now(sub_id):
         "changed": changed_this_check or changed_internal,
         "mail_sent": mail_sent,
         "mail_error": mail_error,
+        "result_status": (diagnostic or {}).get("status"),
+        "hint": (diagnostic or {}).get("hint"),
+        "retryable": (diagnostic or {}).get("retryable"),
+        "source": (diagnostic or {}).get("source"),
+        "confidence": (diagnostic or {}).get("confidence"),
         "last_checked_at": to_taiwan_iso(sub.last_checked_at),
         "last_changed_at": to_taiwan_iso(sub.last_changed_at),
     })
@@ -258,7 +263,7 @@ def check_all_now():
     for sub in subs:
         checked_count += 1
         try:
-            ok, err, changed_internal, mail_sent, mail_error = run_check_subscription(sub.id, current_app)
+            ok, err, changed_internal, mail_sent, mail_error, diagnostic = run_check_subscription(sub.id, current_app)
             if changed_internal:
                 changed_count += 1
             message = None
@@ -274,14 +279,27 @@ def check_all_now():
                 )
                 db.session.add(notification)
             else:
-                message = f"手動檢查失敗：'{sub.name or sub.url}' 無法完成擷取。"
+                status = (diagnostic or {}).get("status") or "failed"
+                hint = (diagnostic or {}).get("hint") or ""
+                message = f"手動檢查失敗：'{sub.name or sub.url}'（{status}）。"
+                if hint:
+                    message += f" 建議：{hint}"
                 notification = Notification(
                     user_id=current_user.id,
                     subscription_id=sub.id,
                     message=message,
                 )
                 db.session.add(notification)
-            results.append({"subscription_id": sub.id, "ok": ok, "changed": changed_internal, "error": err})
+            results.append({
+                "subscription_id": sub.id,
+                "ok": ok,
+                "changed": changed_internal,
+                "error": err,
+                "result_status": (diagnostic or {}).get("status"),
+                "hint": (diagnostic or {}).get("hint"),
+                "retryable": (diagnostic or {}).get("retryable"),
+                "source": (diagnostic or {}).get("source"),
+            })
         except Exception as e:
             message = f"手動檢查錯誤：'{sub.name or sub.url}' 發生例外。"
             notification = Notification(
@@ -290,7 +308,16 @@ def check_all_now():
                 message=message,
             )
             db.session.add(notification)
-            results.append({"subscription_id": sub.id, "ok": False, "changed": False, "error": str(e)})
+            results.append({
+                "subscription_id": sub.id,
+                "ok": False,
+                "changed": False,
+                "error": str(e),
+                "result_status": "exception",
+                "hint": "後端處理時發生例外，請查看伺服器日誌。",
+                "retryable": True,
+                "source": "backend",
+            })
 
     db.session.commit()
     return jsonify({
@@ -392,3 +419,59 @@ def delete_all_notifications():
     deleted_count = Notification.query.filter_by(user_id=current_user.id).delete()
     db.session.commit()
     return jsonify({"ok": True, "deleted_count": deleted_count}), 200
+
+
+# ============ RSS 功能相關端點 ============
+
+
+@subscriptions_bp.route("/rss/detect", methods=["POST"])
+@login_required
+def detect_rss_feeds():
+    """從指定 URL 的頁面偵測 RSS feed 鏈接。"""
+    from backend.services.scraper import detect_rss_feeds, fetch_page_detailed
+    
+    data = request.get_json() or {}
+    url = (data.get("url") or "").strip()
+    
+    if not url:
+        return jsonify({"error": "請提供網址"}), 400
+    
+    try:
+        html, _ = fetch_page_detailed(url, timeout=10)
+        feeds = detect_rss_feeds(html, base_url=url)
+        
+        return jsonify({
+            "url": url,
+            "feeds": feeds,
+            "found": len(feeds) > 0,
+            "message": f"找到 {len(feeds)} 個 RSS feed" if feeds else "此頁面未發現 RSS feed"
+        }), 200
+    
+    except Exception as e:
+        return jsonify({
+            "url": url,
+            "feeds": [],
+            "found": False,
+            "message": f"無法檢測 RSS：{str(e)}"
+        }), 400
+
+
+@subscriptions_bp.route("/rss/validate", methods=["POST"])
+@login_required
+def validate_rss_feed():
+    """驗證指定的 URL 是否提供有效的 RSS feed。"""
+    from backend.services.scraper import validate_rss_feed as validate_feed
+    
+    data = request.get_json() or {}
+    url = (data.get("url") or "").strip()
+    
+    if not url:
+        return jsonify({"error": "請提供 RSS 網址"}), 400
+    
+    result = validate_feed(url, timeout=10)
+    
+    return jsonify({
+        "url": url,
+        **result
+    }), (200 if result["valid"] else 400)
+

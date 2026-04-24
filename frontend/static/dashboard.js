@@ -490,13 +490,42 @@
                 btn.disabled = false;
                 btn.textContent = '立即檢查';
                 if (data && data.ok === false && data.error) {
-                    alert('本次無法完成擷取（仍會更新「上次檢查」時間）：\n' + data.error);
+                    var status = data.result_status || 'failed';
+                    var hint = data.hint || '';
+                    var retryable = (data.retryable !== false);
+                    
+                    // 根據失敗類型提供清晰的分類提示
+                    var categoryHint = '';
+                    if (status.indexOf('rss') >= 0 && status.indexOf('blocked') >= 0) {
+                        categoryHint = '【反爬阻擋】RSS 源被網站拒絕';
+                    } else if (status.indexOf('rss_not_found') >= 0) {
+                        categoryHint = '【無 RSS Feed】此 URL 不提供 RSS';
+                    } else if (status.indexOf('rss') >= 0) {
+                        categoryHint = '【RSS 錯誤】無法取得或解析 RSS';
+                    } else if (status.indexOf('http_403') >= 0 || status.indexOf('http_429') >= 0) {
+                        categoryHint = '【反爬阻擋】網站拒絕自動訪問（' + status + '）';
+                    } else if (status.indexOf('dynamic') >= 0) {
+                        categoryHint = '【動態頁面】需要 JavaScript 渲染';
+                    } else if (status.indexOf('timeout') >= 0) {
+                        categoryHint = '【超時】無法在時限內連線';
+                    }
+                    
+                    var lines = [];
+                    if (categoryHint) lines.push(categoryHint);
+                    lines.push('本次無法完成擷取（不會判定為「無更新」）。');
+                    if (hint) lines.push('詳情：' + hint);
+                    if (!retryable) lines.push('提醒：此狀況通常重試也無效，建議改 RSS 或瀏覽器模式。');
+                    alert(lines.join('\n'));
                 } else if (data && data.ok === true) {
                     if (data.changed) {
                         var diffBox = cardEl ? cardEl.querySelector('.diff-placeholder') : null;
                         if (diffBox) showDiff(id, diffBox);
                     }
-                    else alert('檢查完成：無變更');
+                    else {
+                        var src = data.source ? ('（來源：' + data.source + '）') : '';
+                        var maybeHint = data.hint ? ('\n備註：' + data.hint) : '';
+                        alert('檢查完成：無變更' + src + maybeHint);
+                    }
                 }
                 loadSubscriptions();
                 loadBlockedSites();
@@ -569,7 +598,56 @@
                     btn.textContent = '全部檢查';
                 }
                 if (data && data.ok) {
-                    alert('已完成全部手動檢查：' + data.checked_count + ' 個追蹤，發現 ' + data.changed_count + ' 個更新。');
+                    var results = Array.isArray(data.results) ? data.results : [];
+                    var failed = results.filter(function (r) { return !r.ok; });
+                    var byStatus = {};
+                    var categories = {};
+                    
+                    failed.forEach(function (r) {
+                        var s = r.result_status || 'failed';
+                        byStatus[s] = (byStatus[s] || 0) + 1;
+                        
+                        // 分類
+                        var cat = 'other';
+                        if (s.indexOf('rss') >= 0 && s.indexOf('blocked') >= 0) {
+                            cat = '反爬（RSS）';
+                        } else if (s.indexOf('rss_not_found') >= 0) {
+                            cat = '無RSS';
+                        } else if (s.indexOf('rss') >= 0) {
+                            cat = 'RSS錯誤';
+                        } else if (s.indexOf('http_403') >= 0 || s.indexOf('http_429') >= 0) {
+                            cat = '反爬（HTTP）';
+                        } else if (s.indexOf('dynamic') >= 0) {
+                            cat = '動態頁面';
+                        } else if (s.indexOf('timeout') >= 0) {
+                            cat = '超時';
+                        }
+                        categories[cat] = (categories[cat] || 0) + 1;
+                    });
+                    
+                    var statusSummary = Object.keys(byStatus).map(function (k) {
+                        return k + ' x' + byStatus[k];
+                    }).join('、');
+                    
+                    var categorySummary = Object.keys(categories).map(function (k) {
+                        return k + ' x' + categories[k];
+                    }).join('、');
+
+                    var lines = [
+                        '已完成全部手動檢查：' + data.checked_count + ' 個追蹤，發現 ' + data.changed_count + ' 個更新。'
+                    ];
+                    if (failed.length) {
+                        lines.push('其中 ' + failed.length + ' 個無法判讀/擷取，不會算成「無更新」。');
+                        if (categorySummary) {
+                            lines.push('失敗分類：' + categorySummary);
+                        }
+                        var hint = failed.find(function (r) { return r.hint; });
+                        if (hint) {
+                            var fullHint = hint.result_status ? ('【' + hint.result_status + '】') : '';
+                            lines.push('建議：' + fullHint + hint.hint);
+                        }
+                    }
+                    alert(lines.join('\n'));
                     loadSubscriptions();
                     loadNotifications();
                     loadBlockedSites();
@@ -667,6 +745,125 @@
     if (intervalSelect) {
         intervalSelect.addEventListener('change', toggleCustomIntervalInput);
     }
+
+    // ============ RSS 功能事件監聽 ============
+    var btnDetectRss = qs('btn-detect-rss');
+    var btnValidateRss = qs('btn-validate-rss');
+    var rssResultDiv = qs('rss-result');
+    var rssResultContent = qs('rss-result-content');
+
+    if (btnDetectRss) {
+        btnDetectRss.addEventListener('click', function () {
+            var url = (qs('rss-detect-url').value || '').trim();
+            if (!url) {
+                alert('請輸入網址');
+                return;
+            }
+            btnDetectRss.disabled = true;
+            btnDetectRss.textContent = '檢測中…';
+            fetch('/api/subscriptions/rss/detect', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify({ url: url })
+            })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                btnDetectRss.disabled = false;
+                btnDetectRss.textContent = '🔍 偵測 RSS';
+                var html = '<strong>' + data.message + '</strong>';
+                if (data.feeds && data.feeds.length > 0) {
+                    html += '<ul style="margin-top: 12px; list-style: none; padding: 0;">';
+                    data.feeds.forEach(function (feed) {
+                        var isGuess = feed.is_guess ? ' <span style="color: #999; font-size: 0.9em;">(推測)</span>' : '';
+                        html += '<li style="padding: 8px; background: #fff; border: 1px solid #ddd; margin-bottom: 6px; border-radius: 3px;">';
+                        html += '<strong>' + feed.title + '</strong><br>';
+                        html += '<code style="color: #0066cc; font-size: 0.85em; word-break: break-all;">' + feed.url + '</code>' + isGuess;
+                        html += '<br><button type="button" class="btn-use-feed" data-url="' + feed.url + '" style="margin-top: 6px; font-size: 0.9em; padding: 4px 8px; background: #0066cc; color: #fff; border: none; border-radius: 3px; cursor: pointer;">使用此 RSS</button>';
+                        html += '</li>';
+                    });
+                    html += '</ul>';
+                }
+                rssResultContent.innerHTML = html;
+                rssResultDiv.style.display = 'block';
+
+                // 綁定「使用此 RSS」按鈕
+                document.querySelectorAll('.btn-use-feed').forEach(function (btn) {
+                    btn.addEventListener('click', function () {
+                        var feedUrl = btn.getAttribute('data-url');
+                        qs('sub-url').value = feedUrl;
+                        qs('sub-watch').value = '';  // RSS 通常監測整個 feed
+                        alert('已自動填入 RSS 網址，可立即新增。');
+                    });
+                });
+            })
+            .catch(function (err) {
+                btnDetectRss.disabled = false;
+                btnDetectRss.textContent = '🔍 偵測 RSS';
+                rssResultContent.innerHTML = '<strong style="color: red;">檢測失敗：' + (err && err.message ? err.message : '網路或系統錯誤') + '</strong>';
+                rssResultDiv.style.display = 'block';
+            });
+        });
+    }
+
+    if (btnValidateRss) {
+        btnValidateRss.addEventListener('click', function () {
+            var url = (qs('rss-validate-url').value || '').trim();
+            if (!url) {
+                alert('請輸入 RSS 網址');
+                return;
+            }
+            btnValidateRss.disabled = true;
+            btnValidateRss.textContent = '驗證中…';
+            fetch('/api/subscriptions/rss/validate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify({ url: url })
+            })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                btnValidateRss.disabled = false;
+                btnValidateRss.textContent = '✓ 驗證';
+                var html = '<strong>' + data.message + '</strong>';
+                if (data.valid) {
+                    html = '<strong style="color: green;">✓ ' + data.message + '</strong>';
+                    if (data.title) {
+                        html += '<br>標題：<strong>' + data.title + '</strong>';
+                    }
+                    if (data.type) {
+                        html += '<br>類型：<strong>' + data.type.toUpperCase() + '</strong>';
+                    }
+                    if (data.items_count) {
+                        html += '<br>項目數：<strong>' + data.items_count + '</strong>';
+                    }
+                    html += '<br><button type="button" class="btn-use-validated-feed" data-url="' + url + '" style="margin-top: 12px; font-size: 0.9em; padding: 6px 12px; background: #28a745; color: #fff; border: none; border-radius: 3px; cursor: pointer;">使用此 RSS 網址</button>';
+                } else {
+                    html = '<strong style="color: red;">✗ ' + data.message + '</strong>';
+                }
+                rssResultContent.innerHTML = html;
+                rssResultDiv.style.display = 'block';
+
+                // 綁定「使用此 RSS 網址」按鈕
+                var useBtn = document.querySelector('.btn-use-validated-feed');
+                if (useBtn) {
+                    useBtn.addEventListener('click', function () {
+                        var feedUrl = useBtn.getAttribute('data-url');
+                        qs('sub-url').value = feedUrl;
+                        qs('sub-watch').value = '';
+                        alert('已自動填入 RSS 網址，可立即新增。');
+                    });
+                }
+            })
+            .catch(function (err) {
+                btnValidateRss.disabled = false;
+                btnValidateRss.textContent = '✓ 驗證';
+                rssResultContent.innerHTML = '<strong style="color: red;">驗證失敗：' + (err && err.message ? err.message : '網路或系統錯誤') + '</strong>';
+                rssResultDiv.style.display = 'block';
+            });
+        });
+    }
+
     toggleCustomIntervalInput();
     setInterval(loadSubscriptions, 10000);
     setInterval(loadNotifications, 30000);
