@@ -93,6 +93,7 @@
                 if (!card2) return;
                 var id3 = parseInt(card2.dataset.id, 10);
                 if (confirm('確定要刪除此追蹤？')) deleteOne(id3, card2);
+                return;
             }
         });
 
@@ -120,7 +121,7 @@
                     if (!groups[k]) groups[k] = [];
                     groups[k].push(p);
                 });
-                var order = ['每日更新', '動態網站', '不定時更新', '每月更新', '每季更新', '測試清單', '其他'];
+                var order = ['業師提供', '每日更新', '動態網站', '不定時更新', '每月更新', '每季更新', '測試清單', '其他'];
                 var categories = order.filter(function (k) { return groups[k] && groups[k].length; });
                 var activeCategory = categories[0] || null;
 
@@ -190,7 +191,7 @@
                 });
             })
             .catch(function () {
-                presetEl.innerHTML = '<p class="meta">無法載入常用追蹤清單。</p>';
+                presetEl.innerHTML = '<p class="meta">無法載入推薦清單。</p>';
             });
     }
 
@@ -223,21 +224,12 @@
     function addFromPreset(preset, btn) {
         btn.disabled = true;
         btn.textContent = '加入中…';
-        fetch('/api/subscriptions', {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                url: preset.url,
-                name: preset.name,
-                watch_description: preset.watch_description || null,
-                check_interval_minutes: preset.check_interval_minutes
-            })
+        submitSubscription({
+            url: preset.url,
+            name: preset.name,
+            watch_description: preset.watch_description || null,
+            check_interval_minutes: preset.check_interval_minutes
         })
-            .then(function (r) {
-                if (r.ok || r.status === 201) return r.json();
-                return r.json().then(function (d) { throw new Error(d.error || '新增失敗'); });
-            })
             .then(function () {
                 btn.disabled = false;
                 btn.textContent = '一鍵加入';
@@ -249,6 +241,36 @@
                 btn.textContent = '一鍵加入';
                 alert('加入失敗：' + (err && err.message ? err.message : '未知錯誤'));
             });
+    }
+
+    function submitSubscription(payload) {
+        return fetch('/api/subscriptions', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        }).then(function (r) {
+            return r.json().then(function (d) {
+                if (r.ok || r.status === 201) return d;
+                if (r.status === 409 && d && d.requires_confirmation) {
+                    var ok = confirm((d.error || '已存在相同追蹤。') + '\n\n按「確定」仍要加入，按「取消」放棄。');
+                    if (!ok) throw new Error('已取消新增');
+                    var forced = Object.assign({}, payload, { force_create: true });
+                    return fetch('/api/subscriptions', {
+                        method: 'POST',
+                        credentials: 'same-origin',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(forced)
+                    }).then(function (r2) {
+                        return r2.json().then(function (d2) {
+                            if (!r2.ok) throw new Error(d2.error || '新增失敗');
+                            return d2;
+                        });
+                    });
+                }
+                throw new Error(d.error || '新增失敗');
+            });
+        });
     }
 
     function syncIntervalOptionsFromPresets(presets) {
@@ -455,6 +477,7 @@
     function checkOne(id, btn) {
         btn.disabled = true;
         btn.textContent = '檢查中…';
+        var cardEl = btn && btn.closest ? btn.closest('.sub-card') : null;
         var controller = new AbortController();
         var timeoutId = setTimeout(function () { controller.abort(); }, 25000);
         fetch('/api/subscriptions/' + id + '/check', { method: 'POST', credentials: 'same-origin', signal: controller.signal })
@@ -470,13 +493,8 @@
                     alert('本次無法完成擷取（仍會更新「上次檢查」時間）：\n' + data.error);
                 } else if (data && data.ok === true) {
                     if (data.changed) {
-                        if (data.mail_sent === true) {
-                            alert('檢查完成：有變更，且通知信已寄出');
-                        } else if (data.mail_sent === false) {
-                            alert('檢查完成：有變更，但通知信未寄出\n原因：' + (data.mail_error || '未知'));
-                        } else {
-                            alert('檢查完成：有變更');
-                        }
+                        var diffBox = cardEl ? cardEl.querySelector('.diff-placeholder') : null;
+                        if (diffBox) showDiff(id, diffBox);
                     }
                     else alert('檢查完成：無變更');
                 }
@@ -603,33 +621,20 @@
         } else {
             interval = intervalVal ? parseInt(intervalVal, 10) : 1440;
         }
-        fetch('/api/subscriptions', {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url: url, name: name, watch_description: watch, check_interval_minutes: interval })
-        })
-            .then(function (r) {
-                if (r.ok || r.status === 201) {
-                    console.log('新增訂閱成功', r.status);
-                    alert('新增訂閱成功！');
-                    document.getElementById('sub-url').value = '';
-                    document.getElementById('sub-name').value = '';
-                    document.getElementById('sub-watch').value = '';
-                    document.getElementById('sub-interval').value = '1440';
-                    if (intervalCustomInput) intervalCustomInput.value = '';
-                    toggleCustomIntervalInput();
-                    loadSubscriptions();
-                } else {
-                    return r.json().then(function (d) {
-                        console.error('新增訂閱錯誤', d);
-                        alert('新增失敗: ' + (d.error || '伺服器回應非預期'));
-                    });
-                }
+        submitSubscription({ url: url, name: name, watch_description: watch, check_interval_minutes: interval })
+            .then(function () {
+                alert('新增訂閱成功！');
+                document.getElementById('sub-url').value = '';
+                document.getElementById('sub-name').value = '';
+                document.getElementById('sub-watch').value = '';
+                document.getElementById('sub-interval').value = '1440';
+                if (intervalCustomInput) intervalCustomInput.value = '';
+                toggleCustomIntervalInput();
+                loadSubscriptions();
             })
             .catch(function (err) {
-                console.error('新增訂閱時網路或 JS 錯誤', err);
-                alert('新增失敗：網路或系統錯誤，請開 F12 看 Console');
+                if (err && err.message === '已取消新增') return;
+                alert('新增失敗：' + (err && err.message ? err.message : '網路或系統錯誤'));
             });
     });
 

@@ -8,7 +8,7 @@ class Preset:
     id: str
     name: str
     url: str
-    frequency: str  # 每日更新 / 動態網站 / 不定時更新 / 每月更新 / 每季更新
+    frequency: str  # 每日更新 / 動態網站 / 不定時更新 / 每月更新 / 每季更新 / 業師提供
     check_interval_minutes: int
     watch_description: str | None = None
 
@@ -109,7 +109,7 @@ def get_presets() -> list[Preset]:
             id="tw-gazette",
             name="行政院公報資訊網",
             url="https://gazette.nat.gov.tw/egFront/",
-            frequency="不定時更新",
+            frequency="業師提供",
             check_interval_minutes=360,
             watch_description="法規修正預告與施行日期",
         ),
@@ -117,7 +117,7 @@ def get_presets() -> list[Preset]:
             id="tw-mops",
             name="公開資訊觀測站 MOPS",
             url="https://mops.twse.com.tw/mops/web/index",
-            frequency="每日更新",
+            frequency="業師提供",
             check_interval_minutes=1440,
             watch_description="公司公告、財報、重大訊息（偏公司揭露）",
         ),
@@ -149,9 +149,73 @@ def get_presets() -> list[Preset]:
             id="oecd-tax",
             name="OECD Tax",
             url="https://www.oecd.org/tax/",
-            frequency="不定時更新",
+            frequency="業師提供",
             check_interval_minutes=360,
             watch_description="BEPS、Pillar Two（全球最低稅負）等國際稅務政策",
+        ),
+        Preset(
+            id="mentor-mof-news",
+            name="財政部－本部新聞",
+            url="https://www.mof.gov.tw/",
+            frequency="業師提供",
+            check_interval_minutes=1440,
+            watch_description="追蹤財政部本部新聞與最新公告更新。",
+        ),
+        Preset(
+            id="mentor-ntbna-news",
+            name="財政部北區國稅局－本局新聞稿",
+            url="https://www.ntbna.gov.tw/",
+            frequency="業師提供",
+            check_interval_minutes=1440,
+            watch_description="追蹤北區國稅局新聞稿更新。",
+        ),
+        Preset(
+            id="mentor-moea-news",
+            name="經濟部－本部新聞",
+            url="https://www.moea.gov.tw/",
+            frequency="業師提供",
+            check_interval_minutes=1440,
+            watch_description="追蹤經濟部本部新聞更新。",
+        ),
+        Preset(
+            id="mentor-ida-news",
+            name="經濟部產業發展署－新聞發布",
+            url="https://www.ida.gov.tw/",
+            frequency="業師提供",
+            check_interval_minutes=1440,
+            watch_description="追蹤產業發展署新聞發布更新。",
+        ),
+        Preset(
+            id="mentor-labuan-legislation",
+            name="Labuan Legislation",
+            url="https://www.labuanfsa.gov.my/en/legislation",
+            frequency="業師提供",
+            check_interval_minutes=360,
+            watch_description="檢測是否有新法案，並追蹤既有法案子項目更新。",
+        ),
+        Preset(
+            id="mentor-labuan-media",
+            name="Labuan Media",
+            url="https://www.labuanfsa.gov.my/en/media-centre",
+            frequency="業師提供",
+            check_interval_minutes=360,
+            watch_description="追蹤 Labuan 最新新聞資訊。",
+        ),
+        Preset(
+            id="mentor-oecd-beps",
+            name="OECD Base erosion and profit shifting (BEPS)",
+            url="https://www.oecd.org/tax/beps/",
+            frequency="業師提供",
+            check_interval_minutes=360,
+            watch_description="追蹤 BEPS 最新 insights 與 related publications。",
+        ),
+        Preset(
+            id="mentor-oecd-global-minimum-tax",
+            name="OECD Global Minimum Tax",
+            url="https://www.oecd.org/tax/beps/pillar-two-model-rules-in-a-nutshell.htm",
+            frequency="業師提供",
+            check_interval_minutes=360,
+            watch_description="追蹤全球最低稅負（Pillar Two）相關更新。",
         ),
         Preset(
             id="ifrs-foundation",

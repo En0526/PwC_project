@@ -36,6 +36,7 @@ def interval_label(minutes):
     mapping = {
         1: "每分鐘",
         60: "每小時",
+        360: "6小時",
         1440: "每天",
         10080: "每週",
         43200: "每月",
@@ -114,6 +115,26 @@ def create_subscription():
         return jsonify({"error": "檢查頻率無效"}), 400
     if check_interval_minutes <= 0:
         return jsonify({"error": "檢查頻率需大於 0 分鐘"}), 400
+    force_create = bool(data.get("force_create"))
+    norm_url = url.lower()
+    norm_watch = (watch_description or "").strip().lower()
+    if not force_create:
+        existing = Subscription.query.filter_by(user_id=current_user.id).all()
+        duplicate = next(
+            (
+                s
+                for s in existing
+                if (s.url or "").strip().lower() == norm_url
+                and ((s.watch_description or "").strip().lower() == norm_watch)
+            ),
+            None,
+        )
+        if duplicate:
+            return jsonify({
+                "error": "你已加入相同網站與監看區塊，是否仍要重複加入？",
+                "requires_confirmation": True,
+                "duplicate_subscription_id": duplicate.id,
+            }), 409
     sub = Subscription(
         user_id=current_user.id,
         url=url,
