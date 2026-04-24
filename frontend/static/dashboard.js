@@ -20,7 +20,6 @@
         const listEl = qs('sub-list');
         const form = qs('form-add-sub');
         const presetEl = qs('preset-list');
-        const blockedEl = qs('blocked-list');
         const intervalSelect = qs('sub-interval');
         const intervalCustomInput = qs('sub-interval-custom');
         const notifEl = qs('notif-list');
@@ -193,32 +192,6 @@
             })
             .catch(function () {
                 presetEl.innerHTML = '<p class="meta">無法載入推薦清單。</p>';
-            });
-    }
-
-    function loadBlockedSites() {
-        if (!blockedEl) return;
-        fetch('/api/blocked-sites', { credentials: 'same-origin' })
-            .then(function (r) { return r.json(); })
-            .then(function (data) {
-                var sites = (data && data.sites) ? data.sites : [];
-                if (!sites.length) {
-                    blockedEl.innerHTML = '<span class="meta">尚無紀錄。</span>';
-                    return;
-                }
-                blockedEl.innerHTML = sites.map(function (s) {
-                    var at = s.last_seen_at ? new Date(s.last_seen_at).toLocaleString('zh-TW') : '-';
-                    return (
-                        '<div class="sub-card preset-card">' +
-                        '<div class="url">' + escapeHtml(s.url) + '</div>' +
-                        '<div class="meta">疑似被擋次數：' + (s.count || 0) + '　最近：' + at + '</div>' +
-                        '<div class="meta">最後錯誤：' + escapeHtml(s.last_error || '-') + '</div>' +
-                        '</div>'
-                    );
-                }).join('');
-            })
-            .catch(function () {
-                blockedEl.innerHTML = '<span class="meta">無法載入反爬紀錄。</span>';
             });
     }
 
@@ -529,7 +502,6 @@
                     }
                 }
                 loadSubscriptions();
-                loadBlockedSites();
             })
             .catch(function (err) {
                 clearTimeout(timeoutId);
@@ -652,7 +624,6 @@
                     alert(lines.join('\n'));
                     loadSubscriptions();
                     loadNotifications();
-                    loadBlockedSites();
                 } else {
                     alert('全部檢查發生錯誤。');
                 }
@@ -720,7 +691,6 @@
 
     loadSubscriptions();
     loadPresets();
-    loadBlockedSites();
     loadNotifications();
     var checkAllBtn = qs('btn-check-all');
     if (checkAllBtn) {
