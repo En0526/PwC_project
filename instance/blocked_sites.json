@@ -1,0 +1,39 @@
+{
+  "sites": {
+    "https://www.cmegroup.com/cn-t/markets/interest-rates/cme-fedwatch-tool.html": {
+      "url": "https://www.cmegroup.com/cn-t/markets/interest-rates/cme-fedwatch-tool.html",
+      "count": 12,
+      "first_seen_at": "2026-04-24T03:24:34.837537",
+      "last_seen_at": "2026-04-24T11:55:45.739200",
+      "last_error": "http_403: 網站拒絕存取 (HTTP 403): https://www.cmegroup.com/cn-t/markets/interest-rates/cme-fedwatch-tool.html"
+    },
+    "https://www.oecd.org/tax/": {
+      "url": "https://www.oecd.org/tax/",
+      "count": 6,
+      "first_seen_at": "2026-04-24T03:45:51.038123",
+      "last_seen_at": "2026-04-24T08:15:57.935021",
+      "last_error": "http_403: 網站拒絕存取 (HTTP 403): https://www.oecd.org/tax/"
+    },
+    "https://www.moea.gov.tw/": {
+      "url": "https://www.moea.gov.tw/",
+      "count": 11,
+      "first_seen_at": "2026-04-24T03:45:54.072916",
+      "last_seen_at": "2026-04-24T08:26:37.032691",
+      "last_error": "http_403: 網站拒絕存取 (HTTP 403): https://www.moea.gov.tw/"
+    },
+    "https://www.oecd.org/tax/beps/": {
+      "url": "https://www.oecd.org/tax/beps/",
+      "count": 11,
+      "first_seen_at": "2026-04-24T03:46:07.936214",
+      "last_seen_at": "2026-04-24T08:16:01.800907",
+      "last_error": "http_403: 網站拒絕存取 (HTTP 403): https://www.oecd.org/tax/beps/"
+    },
+    "https://www.oecd.org/tax/beps/pillar-two-model-rules-in-a-nutshell.htm": {
+      "url": "https://www.oecd.org/tax/beps/pillar-two-model-rules-in-a-nutshell.htm",
+      "count": 10,
+      "first_seen_at": "2026-04-24T03:46:08.783419",
+      "last_seen_at": "2026-04-24T08:16:02.100999",
+      "last_error": "http_403: 網站拒絕存取 (HTTP 403): https://www.oecd.org/tax/beps/pillar-two-model-rules-in-a-nutshell.htm"
+    }
+  }
+}

@@ -823,12 +823,27 @@
                 credentials: 'same-origin',
                 body: JSON.stringify({ url: url })
             })
-            .then(function (r) { return r.json(); })
-            .then(function (data) {
+            .then(function (r) {
+                var status = r.status;
+                return r.json().then(function (data) {
+                    return { status: status, data: data };
+                });
+            })
+            .then(function (result) {
                 btnValidateRss.disabled = false;
                 btnValidateRss.textContent = '✓ 驗證';
-                var html = '<strong>' + data.message + '</strong>';
-                if (data.valid) {
+                var data = result.data;
+                var status = result.status;
+                var html = '';
+                
+                // 處理 RSS 被阻擋的情況（202 建議改用 HTML）
+                if (status === 202 && data.suggestion && data.suggestion.type === 'use_html_instead') {
+                    html = '<strong style="color: orange;">⚠️ RSS 被反爬阻擋</strong><br>';
+                    html += '<p style="font-size: 0.9em; color: #555;">' + data.message + '</p>';
+                    html += '<p style="font-size: 0.9em; color: #555;"><strong>建議方案：</strong>監測主頁面 HTML，系統將自動偵測內容變化。</p>';
+                    html += '<button type="button" class="btn-use-homepage" data-url="' + data.suggestion.homepage_url + '" style="margin-top: 8px; font-size: 0.9em; padding: 8px 14px; background: #ff9800; color: #fff; border: none; border-radius: 3px; cursor: pointer;">📄 使用主頁面 HTML 監測</button>';
+                    html += ' <button type="button" class="btn-use-custom-rss" data-url="' + url + '" style="margin-left: 6px; font-size: 0.9em; padding: 8px 14px; background: #2196F3; color: #fff; border: none; border-radius: 3px; cursor: pointer;">或輸入其他 RSS</button>';
+                } else if (data.valid) {
                     html = '<strong style="color: green;">✓ ' + data.message + '</strong>';
                     if (data.title) {
                         html += '<br>標題：<strong>' + data.title + '</strong>';
@@ -843,6 +858,7 @@
                 } else {
                     html = '<strong style="color: red;">✗ ' + data.message + '</strong>';
                 }
+                
                 rssResultContent.innerHTML = html;
                 rssResultDiv.style.display = 'block';
 
@@ -854,6 +870,25 @@
                         qs('sub-url').value = feedUrl;
                         qs('sub-watch').value = '';
                         alert('已自動填入 RSS 網址，可立即新增。');
+                    });
+                }
+                
+                // 綁定「使用主頁面 HTML」按鈕
+                var homeBtn = document.querySelector('.btn-use-homepage');
+                if (homeBtn) {
+                    homeBtn.addEventListener('click', function () {
+                        var homepageUrl = homeBtn.getAttribute('data-url');
+                        qs('sub-url').value = homepageUrl;
+                        qs('sub-watch').value = '更新內容';  // 自動填入監測描述
+                        alert('已自動填入主頁面 URL 和監測內容「更新內容」，系統將監測此頁面的 HTML 變化。');
+                    });
+                }
+                
+                // 綁定「輸入其他 RSS」按鈕
+                var customBtn = document.querySelector('.btn-use-custom-rss');
+                if (customBtn) {
+                    customBtn.addEventListener('click', function () {
+                        alert('您可以嘗試找到其他 RSS 源，或改用主頁面 HTML 監測。');
                     });
                 }
             })

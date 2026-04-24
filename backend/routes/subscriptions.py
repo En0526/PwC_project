@@ -439,8 +439,8 @@ def delete_all_notifications():
 @subscriptions_bp.route("/rss/detect", methods=["POST"])
 @login_required
 def detect_rss_feeds():
-    """從指定 URL 的頁面偵測 RSS feed 鏈接。"""
-    from backend.services.scraper import detect_rss_feeds, fetch_page_detailed
+    """從指定 URL 的頁面偵測 RSS feed 鏈接。支援 Playwright fallback。"""
+    from backend.services.scraper import detect_rss_feeds, fetch_page_detailed, fetch_page_playwright, ScrapeFailure
     
     data = request.get_json() or {}
     url = (data.get("url") or "").strip()
@@ -449,14 +449,29 @@ def detect_rss_feeds():
         return jsonify({"error": "請提供網址"}), 400
     
     try:
-        html, _ = fetch_page_detailed(url, timeout=10)
+        # 先嘗試正常 fetch
+        source = "direct"
+        try:
+            html, _ = fetch_page_detailed(url, timeout=10)
+        except ScrapeFailure as e:
+            # 如果被反爬阻擋，改用 Playwright fallback
+            if e.code in ("http_403", "http_429", "timeout", "connection_error"):
+                try:
+                    html, _ = fetch_page_playwright(url, timeout=15)
+                    source = "playwright"
+                except ScrapeFailure:
+                    raise e  # 都失敗，回報原始錯誤
+            else:
+                raise e
+        
         feeds = detect_rss_feeds(html, base_url=url)
         
         return jsonify({
             "url": url,
             "feeds": feeds,
             "found": len(feeds) > 0,
-            "message": f"找到 {len(feeds)} 個 RSS feed" if feeds else "此頁面未發現 RSS feed"
+            "source": source,
+            "message": f"找到 {len(feeds)} 個 RSS feed ({source})" if feeds else "此頁面未發現 RSS feed"
         }), 200
     
     except Exception as e:
@@ -471,8 +486,9 @@ def detect_rss_feeds():
 @subscriptions_bp.route("/rss/validate", methods=["POST"])
 @login_required
 def validate_rss_feed():
-    """驗證指定的 URL 是否提供有效的 RSS feed。"""
-    from backend.services.scraper import validate_rss_feed as validate_feed
+    """驗證指定 URL 是否提供有效 RSS feed。若無法驗證，建議改用 HTML 監測。"""
+    from backend.services.scraper import validate_rss_feed as validate_feed, ScrapeFailure
+    from urllib.parse import urlparse
     
     data = request.get_json() or {}
     url = (data.get("url") or "").strip()
@@ -480,10 +496,38 @@ def validate_rss_feed():
     if not url:
         return jsonify({"error": "請提供 RSS 網址"}), 400
     
-    result = validate_feed(url, timeout=10)
-    
-    return jsonify({
-        "url": url,
-        **result
-    }), (200 if result["valid"] else 400)
+    try:
+        result = validate_feed(url, timeout=10)
+        return jsonify({
+            "url": url,
+            **result
+        }), (200 if result["valid"] else 400)
+    except ScrapeFailure as e:
+        # 任何驗證失敗都可以建議使用主頁面 HTML
+        parsed = urlparse(url)
+        homepage_url = f"{parsed.scheme}://{parsed.netloc}/"
+        
+        # 根據錯誤代碼決定提示語
+        reason = "RSS 端點無法存取或無效"
+        if e.code in ("http_403", "rss_fetch_failed_blocked"):
+            reason = "此 RSS 源被網站反爬保護"
+        elif e.code in ("timeout", "rss_fetch_failed_timeout"):
+            reason = "RSS 源伺服器回應過慢"
+        elif e.code == "rss_not_found":
+            reason = "此連結無有效 RSS 內容"
+        
+        return jsonify({
+            "url": url,
+            "valid": False,
+            "type": None,
+            "items_count": 0,
+            "title": "",
+            "message": f"{reason}。建議改為監測主頁面 HTML：{homepage_url}",
+            "suggestion": {
+                "type": "use_html_instead",
+                "homepage_url": homepage_url,
+                "reason": reason,
+                "error_code": e.code
+            }
+        }), 202  # 202 Accepted (partial success with suggestion)
 

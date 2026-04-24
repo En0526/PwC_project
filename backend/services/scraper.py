@@ -10,6 +10,12 @@ from urllib.parse import urlparse, urlunparse
 import requests
 from bs4 import BeautifulSoup
 
+try:
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, sync_playwright
+except Exception:  # pragma: no cover - optional dependency
+    PlaywrightTimeoutError = None
+    sync_playwright = None
+
 from backend.services.gemini_service import extract_watch_content
 from backend.services.presets import get_presets
 from backend.services.stdtime_notify import format_stdtime_snapshot_from_api_body
@@ -359,6 +365,63 @@ def _classify_request_exception(e: requests.RequestException, url: str, used_ins
     )
 
 
+def _playwright_enabled() -> bool:
+    raw = (os.environ.get("PLAYWRIGHT_FALLBACK_ENABLED") or "1").strip().lower()
+    return raw not in ("0", "false", "no")
+
+
+def fetch_page_playwright(url: str, timeout: int = 20) -> tuple[str, str]:
+    """使用 Playwright 抓取頁面（處理 JS 動態載入與部分反爬場景）。"""
+    if not _playwright_enabled():
+        raise ScrapeFailure(
+            code="playwright_disabled",
+            message="Playwright fallback 已被停用。",
+            hint="可設定 PLAYWRIGHT_FALLBACK_ENABLED=1 啟用瀏覽器模式。",
+            retryable=False,
+        )
+    if sync_playwright is None:
+        raise ScrapeFailure(
+            code="playwright_unavailable",
+            message="未安裝 Playwright。",
+            hint="請安裝 playwright 套件並執行 `playwright install chromium`。",
+            retryable=False,
+        )
+
+    normalized_url = normalize_url(url)
+    browser = None
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(user_agent=USER_AGENT, locale="zh-TW")
+            page = context.new_page()
+            page.goto(normalized_url, wait_until="domcontentloaded", timeout=timeout * 1000)
+            page.wait_for_timeout(1200)
+            html = page.content()
+            context.close()
+            return html, "text/html; charset=utf-8"
+    except Exception as e:
+        is_pw_timeout = PlaywrightTimeoutError is not None and isinstance(e, PlaywrightTimeoutError)
+        if is_pw_timeout:
+            raise ScrapeFailure(
+                code="playwright_timeout",
+                message=f"瀏覽器模式逾時: {e}",
+                hint="網站載入過慢，請稍後再試。",
+                retryable=True,
+            ) from e
+        raise ScrapeFailure(
+            code="playwright_error",
+            message=f"瀏覽器模式失敗: {e}",
+            hint="建議確認 Chromium 是否安裝完成，或稍後重試。",
+            retryable=True,
+        ) from e
+    finally:
+        if browser is not None:
+            try:
+                browser.close()
+            except Exception:
+                pass
+
+
 def _get_insecure_ssl_domains() -> set[str]:
     # 內建已知憑證異常站台（可再由 .env 擴充）
     domains = {"www.ardf.org.tw", "law.moj.gov.tw"}
@@ -489,6 +552,7 @@ def scrape_and_extract(
         return st_text, h, {"status": "ok", "source": "stdtime", "confidence": 1.0, "hint": ""}
 
     url_expects_rss = _url_expects_rss(url)
+    playwright_used = False
 
     try:
         html, content_type = fetch_page_detailed(url)
@@ -496,14 +560,20 @@ def scrape_and_extract(
         # fetch 失敗：判斷是否期望 RSS
         if url_expects_rss:
             # URL 看起來像 RSS，但 fetch 失敗
+            # 如果被 403/429 阻擋，也嘗試 Playwright fallback
             if e.code in ("http_403", "http_429"):
-                raise ScrapeFailure(
-                    code="rss_fetch_failed_blocked",
-                    message=f"無法取得 RSS feed：{e.message}",
-                    hint="此 RSS 源被網站反爬阻擋（403/429），建議更換 feed 來源或稍後重試。",
-                    retryable=True,
-                    http_status=e.http_status,
-                ) from e
+                try:
+                    html, content_type = fetch_page_playwright(url)
+                    playwright_used = True
+                except ScrapeFailure as pe:
+                    # Playwright 也失敗，回報 RSS 被阻擋的錯誤
+                    raise ScrapeFailure(
+                        code="rss_fetch_failed_blocked",
+                        message=f"無法取得 RSS feed：{e.message}（已嘗試瀏覽器模式）",
+                        hint="此 RSS 源被網站反爬嚴格阻擋，建議改為監測主頁面 HTML，或更換 feed 來源。",
+                        retryable=False,
+                        http_status=e.http_status,
+                    ) from e
             elif e.code == "timeout":
                 raise ScrapeFailure(
                     code="rss_fetch_failed_timeout",
@@ -519,8 +589,21 @@ def scrape_and_extract(
                     retryable=True,
                 ) from e
         else:
-            # URL 不是 RSS，直接丟出原異常
-            raise e
+            # URL 不是 RSS：遇到反爬/連線問題時嘗試瀏覽器模式 fallback
+            if e.code in ("http_403", "http_429", "timeout", "connection_error", "http_5xx", "http_error", "request_error"):
+                try:
+                    html, content_type = fetch_page_playwright(url)
+                    playwright_used = True
+                except ScrapeFailure as pe:
+                    raise ScrapeFailure(
+                        code=e.code,
+                        message=e.message,
+                        hint=f"{e.hint}；且瀏覽器模式也失敗（{pe.code}）。",
+                        retryable=e.retryable,
+                        http_status=e.http_status,
+                    ) from e
+            else:
+                raise e
 
     # fetch 成功，檢查內容格式
     if _is_probably_rss(url, content_type, html):
@@ -541,16 +624,30 @@ def scrape_and_extract(
     full_text = html_to_clean_text(html)
 
     if _looks_dynamic_unreadable(html, full_text):
-        raise ScrapeFailure(
-            code="html_dynamic_unreadable",
-            message="此網站主要內容由 JavaScript 動態載入，無法穩定判讀。",
-            hint="建議改用 RSS，或改成瀏覽器渲染模式（Playwright）後再監測。",
-            retryable=False,
-        )
+        if not playwright_used:
+            try:
+                html, content_type = fetch_page_playwright(url)
+                playwright_used = True
+                full_text = html_to_clean_text(html)
+            except ScrapeFailure:
+                raise ScrapeFailure(
+                    code="html_dynamic_unreadable",
+                    message="此網站主要內容由 JavaScript 動態載入，無法穩定判讀。",
+                    hint="建議改用 RSS，或啟用瀏覽器渲染模式（需安裝 Playwright）。",
+                    retryable=False,
+                )
+        if _looks_dynamic_unreadable(html, full_text):
+            raise ScrapeFailure(
+                code="html_dynamic_unreadable",
+                message="此網站主要內容由 JavaScript 動態載入，無法穩定判讀。",
+                hint="建議改用 RSS，或改成瀏覽器渲染模式（Playwright）後再監測。",
+                retryable=False,
+            )
 
     if not watch_description or not watch_description.strip():
         h = content_hash(full_text)
-        return full_text, h, {"status": "ok", "source": "html", "confidence": 0.8, "hint": ""}
+        source = "playwright_html" if playwright_used else "html"
+        return full_text, h, {"status": "ok", "source": source, "confidence": 0.8, "hint": ""}
 
     if use_gemini and gemini_api_key:
         try:
@@ -562,15 +659,17 @@ def scrape_and_extract(
             )
             if extracted:
                 h = content_hash(extracted)
-                return extracted, h, {"status": "ok", "source": "gemini", "confidence": 0.85, "hint": ""}
+                source = "playwright_gemini" if playwright_used else "gemini"
+                return extracted, h, {"status": "ok", "source": source, "confidence": 0.85, "hint": ""}
         except Exception:
             pass  # 失敗時 fallback 到全文
 
     # 無 AI 或失敗：回傳全文
     h = content_hash(full_text)
+    source = "playwright_html_fallback" if playwright_used else "html_fallback"
     return full_text, h, {
         "status": "ok",
-        "source": "html_fallback",
+        "source": source,
         "confidence": 0.65,
         "hint": "AI 區塊擷取失敗，已改用整頁內容比對。",
     }
