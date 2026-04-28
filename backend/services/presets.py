@@ -70,7 +70,7 @@ def get_presets() -> list[Preset]:
             name="行政院公報資訊網",
             url="https://gazette.nat.gov.tw/egFront/browseVolume.do?action=doGroupQuery&chapter=4&log=filter&filterId=114",
             frequency="業師提供",
-            check_interval_minutes=360,
+            check_interval_minutes=30,
             watch_description="追蹤最新「卷期瀏覽」，查詢條件鎖定「財政經濟篇」，並確認是否為最新期公報。",
         ),
         Preset(
@@ -78,7 +78,7 @@ def get_presets() -> list[Preset]:
             name="公開資訊觀測站 MOPS",
             url="https://mops.twse.com.tw/mops/web/t05sr01_1",
             frequency="業師提供",
-            check_interval_minutes=1440,
+            check_interval_minutes=30,
             watch_description="追蹤最新「即時重大資訊」，可篩選上市、上櫃或興櫃公司的重大訊息與財報公告日期。",
         ),
         Preset(
@@ -110,7 +110,7 @@ def get_presets() -> list[Preset]:
             name="財政部－本部新聞",
             url="https://www.mof.gov.tw/multiplehtml/384fb3077bb349ea973e7fc6f13b6974",
             frequency="業師提供",
-            check_interval_minutes=1440,
+            check_interval_minutes=30,
             watch_description="追蹤最新新聞資訊，特別是「本部新聞」類別下關於稅務、電子發票及軟體申報的公告。",
         ),
         Preset(
@@ -118,7 +118,7 @@ def get_presets() -> list[Preset]:
             name="財政部－北區國稅局",
             url="https://www.ntbna.gov.tw/htmlList/b6749b429a3b4ca7828e366d6fde8bcc",
             frequency="業師提供",
-            check_interval_minutes=1440,
+            check_interval_minutes=30,
             watch_description="追蹤最新「新聞稿」與「本週新聞」，留意遺產稅、營利事業所得稅及 AI 輔助查核等資訊。",
         ),
         Preset(
@@ -126,7 +126,7 @@ def get_presets() -> list[Preset]:
             name="經濟部－本部新聞",
             url="https://www.moea.gov.tw/MNS/populace/news/News.aspx?kind=1&menu_id=40",
             frequency="業師提供",
-            check_interval_minutes=1440,
+            check_interval_minutes=30,
             watch_description="只監測「首頁 > 新聞與公告 > 本部新聞」列表。Agent 1 請穩定擷取新聞列表中的日期、標題、發布單位與時間；Agent 2 僅整理新增或移除中與法規、公告、政策發布、公告送達相關的項目，忽略一般宣傳性新聞。",
         ),
         Preset(
@@ -134,7 +134,7 @@ def get_presets() -> list[Preset]:
             name="經濟部－即時新聞澄清",
             url="https://www.moea.gov.tw/MNS/populace/news/News.aspx?kind=9&menu_id=22333",
             frequency="業師提供",
-            check_interval_minutes=1440,
+            check_interval_minutes=30,
             watch_description="只監測「首頁 > 新聞與公告 > 即時新聞澄清」列表。Agent 1 請穩定擷取澄清新聞列表中的日期、標題、發布單位與時間；Agent 2 優先整理新增或移除的澄清、說明、更正與公告送達資訊，不要提供其他無關新聞。",
         ),
         Preset(
@@ -142,7 +142,7 @@ def get_presets() -> list[Preset]:
             name="經濟部產業發展署－新聞發布",
             url="https://www.ida.gov.tw/ctlr?PRO=news.NewsList",
             frequency="業師提供",
-            check_interval_minutes=1440,
+            check_interval_minutes=30,
             watch_description="追蹤最新「新聞發布」，重點在於產業政策（如淨零碳排、AI 發展）及最新公告事項。",
         ),
         Preset(
@@ -150,7 +150,7 @@ def get_presets() -> list[Preset]:
             name="經濟部產業發展署－新聞 RSS",
             url="https://www.ida.gov.tw/ctlr?PRO=rss.RSSView&t=1",
             frequency="業師提供",
-            check_interval_minutes=360,
+            check_interval_minutes=30,
             watch_description="RSS 格式，包含產業政策新聞、重大宣布及發展成果。比網頁版更及時（每 6 小時檢查），自動比對差異並推送通知。",
         ),
         Preset(
@@ -158,7 +158,7 @@ def get_presets() -> list[Preset]:
             name="Labuan Legislation",
             url="https://www.labuanfsa.gov.my/regulations/legislation/act",
             frequency="業師提供",
-            check_interval_minutes=360,
+            check_interval_minutes=30,
             watch_description="檢測是否有新法案（Acts），並進一步確認各法案子項目是否有更新（如 2025 年修正案）。",
         ),
         Preset(
@@ -166,7 +166,7 @@ def get_presets() -> list[Preset]:
             name="Labuan Media",
             url="https://www.labuanibfc.com/resources-events/media/press-releases",
             frequency="業師提供",
-            check_interval_minutes=360,
+            check_interval_minutes=30,
             watch_description="追蹤最新新聞資訊，包含新聞稿（Press Releases）以及重要演講稿（Speeches）。",
         ),
         Preset(
@@ -174,7 +174,7 @@ def get_presets() -> list[Preset]:
             name="OECD Base erosion and profit shifting (BEPS)",
             url="https://www.oecd.org/en/topics/beps.html",
             frequency="業師提供",
-            check_interval_minutes=360,
+            check_interval_minutes=30,
             watch_description="追蹤最新新聞與洞察（Latest insights），關注移轉定價、有害稅收實踐及統計報告。",
         ),
         Preset(
@@ -182,7 +182,7 @@ def get_presets() -> list[Preset]:
             name="OECD Global Minimum Tax",
             url="https://www.oecd.org/en/topics/global-minimum-tax.html",
             frequency="業師提供",
-            check_interval_minutes=360,
+            check_interval_minutes=30,
             watch_description="追蹤全球最低稅負制最新進展，包含 Pillar Two、XML 數據交換格式及相關申報指南。",
         ),
     ]
