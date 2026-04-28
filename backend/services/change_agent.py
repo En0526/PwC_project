@@ -13,6 +13,8 @@ from backend.services.ntbna_monitor_agent import is_ntbna_news_url
 from backend.services.ntbna_diff_agent import generate_ntbna_diff_report
 from backend.services.chinatimes_monitor_agent import is_chinatimes_home_url
 from backend.services.chinatimes_diff_agent import generate_chinatimes_diff_report
+from backend.services.mops_monitor_agent import is_mops_realtime_url
+from backend.services.mops_diff_agent import generate_mops_diff_report
 
 try:
     import google.generativeai as genai
@@ -32,6 +34,16 @@ def generate_change_report(
     model_name: str | None = None,
 ) -> str:
     """Generate a readable summary for a detected content change."""
+    if is_mops_realtime_url(url):
+        mops_report = generate_mops_diff_report(
+            previous_snapshot=previous_snapshot,
+            current_snapshot=current_snapshot,
+            api_key=api_key,
+            model_name=model_name,
+        )
+        if mops_report:
+            return mops_report
+
     if is_ntbna_news_url(url):
         ntbna_report = generate_ntbna_diff_report(
             previous_snapshot=previous_snapshot,

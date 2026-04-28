@@ -47,6 +47,9 @@ def extract_known_section_snapshot(
             watch_description=watch_description,
         )
 
+    if host.endswith("mops.twse.com.tw") and "t05sr01_1" in (parsed.path or ""):
+        return extract_mops_snapshot(url=url, html=html, full_text=full_text)
+
     return None
 
 
@@ -246,6 +249,116 @@ def _extract_moea_total_records(full_text: str) -> str:
 def _first_text(node, tag_name: str, **kwargs) -> str:
     found = node.find(tag_name, **kwargs)
     return _clean_text(found.get_text(" ", strip=True)) if found else ""
+
+
+def extract_mops_snapshot(*, url: str, html: str, full_text: str) -> SectionSnapshot | None:
+    """Extract MOPS 即時重大資訊 list rows from the main table."""
+    soup = BeautifulSoup(html, "html.parser")
+    
+    # 尋找資訊表格
+    table = None
+    for tbl in soup.find_all("table"):
+        rows = tbl.find_all("tr")
+        if len(rows) < 2:
+            continue
+        # 檢查是否為目標表格（應包含公司代碼、公司名稱、發布時間等）
+        first_row_text = _clean_text(rows[0].get_text(" ", strip=True))
+        if any(keyword in first_row_text for keyword in ["公司", "代碼", "發布", "時間", "代號"]):
+            table = tbl
+            break
+    
+    if table is None:
+        return None
+    
+    items: list[dict[str, str]] = []
+    seen_keys: set[str] = set()
+    
+    for row in table.find_all("tr")[1:]:  # 跳過表頭
+        cells = row.find_all(["td", "th"])
+        if len(cells) < 3:
+            continue
+        
+        # 提取公司代碼
+        code_text = _clean_text(cells[0].get_text(" ", strip=True))
+        if not code_text or not re.match(r"^\d+$", code_text):
+            continue
+        
+        # 提取公司名稱
+        company_text = _clean_text(cells[1].get_text(" ", strip=True))
+        if not company_text:
+            continue
+        
+        # 提取時間
+        time_text = _clean_text(cells[2].get_text(" ", strip=True))
+        if not time_text:
+            continue
+        
+        # 提取標題與連結
+        title_text = ""
+        link_url = ""
+        if len(cells) > 3:
+            link = cells[3].find("a", href=True)
+            if link:
+                title_text = _clean_text(link.get_text(" ", strip=True))
+                href_raw = link.get("href", "").strip()
+                if href_raw:
+                    link_url = urljoin(url, href_raw)
+            else:
+                title_text = _clean_text(cells[3].get_text(" ", strip=True))
+        
+        if not title_text:
+            continue
+        
+        # 去重
+        item_key = f"{code_text}|{time_text}|{title_text}"
+        if item_key in seen_keys:
+            continue
+        seen_keys.add(item_key)
+        
+        items.append({
+            "code": code_text,
+            "company": company_text,
+            "time": time_text,
+            "title": title_text,
+            "url": link_url,
+        })
+    
+    if not items:
+        return None
+    
+    total_records = _extract_mops_total_records(full_text)
+    lines = [
+        "[站點] 公開資訊觀測站 MOPS",
+        "[區塊] 首頁 > 即時重大資訊",
+        f"[來源] {url}",
+    ]
+    if total_records:
+        lines.append(f"[總筆數] {total_records}")
+    lines.append("[新聞列表]")
+    for item in items:
+        line_parts = [
+            f"  [{item['code']}]",
+            item["company"],
+            item["time"],
+            item["title"],
+        ]
+        if item.get("url"):
+            line_parts.append(f"| {item['url']}")
+        lines.append(" ".join(line_parts))
+    
+    return SectionSnapshot(
+        site_name="公開資訊觀測站 MOPS",
+        section_name="首頁 > 即時重大資訊",
+        source_url=url,
+        text="\n".join(lines),
+        confidence=0.93,
+    )
+
+
+def _extract_mops_total_records(full_text: str) -> str:
+    """Extract total record count from MOPS page."""
+    match = re.search(r"(?:共|總計|共計)\s*(?:有)?\s*([\d,]+)\s*(?:筆|項)", full_text or "")
+    return match.group(1).replace(",", "") if match else ""
 
 
 def _clean_text(text: str) -> str:
