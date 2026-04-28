@@ -124,10 +124,18 @@ def get_presets() -> list[Preset]:
         Preset(
             id="mentor-moea-news",
             name="經濟部－本部新聞",
-            url="https://www.moea.gov.tw/Mns/populace/news/News.aspx?kind=1",
+            url="https://www.moea.gov.tw/MNS/populace/news/News.aspx?kind=1&menu_id=40",
             frequency="業師提供",
             check_interval_minutes=1440,
-            watch_description="追蹤最新新聞資訊，關注本部新聞、即時新聞澄清及各署處的政令發布。",
+            watch_description="只監測「首頁 > 新聞與公告 > 本部新聞」列表。Agent 1 請穩定擷取新聞列表中的日期、標題、發布單位與時間；Agent 2 僅整理新增或移除中與法規、公告、政策發布、公告送達相關的項目，忽略一般宣傳性新聞。",
+        ),
+        Preset(
+            id="mentor-moea-clarification",
+            name="經濟部－即時新聞澄清",
+            url="https://www.moea.gov.tw/MNS/populace/news/News.aspx?kind=9&menu_id=22333",
+            frequency="業師提供",
+            check_interval_minutes=1440,
+            watch_description="只監測「首頁 > 新聞與公告 > 即時新聞澄清」列表。Agent 1 請穩定擷取澄清新聞列表中的日期、標題、發布單位與時間；Agent 2 優先整理新增或移除的澄清、說明、更正與公告送達資訊，不要提供其他無關新聞。",
         ),
         Preset(
             id="mentor-ida-news",

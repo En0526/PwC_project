@@ -22,6 +22,7 @@ def generate_change_report(
     site_name: str,
     previous_snapshot: str,
     current_snapshot: str,
+    watch_description: str | None = None,
     fallback_summary: str | None = None,
     api_key: str | None = None,
     model_name: str | None = None,
@@ -41,6 +42,7 @@ def generate_change_report(
         site_name=site_name,
         previous_snapshot=previous_snapshot,
         current_snapshot=current_snapshot,
+        watch_description=watch_description,
         api_key=api_key,
         model_name=model_name,
     )
@@ -55,6 +57,7 @@ def _section_list_report(
     site_name: str,
     previous_snapshot: str,
     current_snapshot: str,
+    watch_description: str | None = None,
     api_key: str | None = None,
     model_name: str | None = None,
 ) -> str | None:
@@ -74,6 +77,10 @@ def _section_list_report(
     section_name = _extract_field(current_snapshot, "區塊") or "監測區塊"
     snapshot_site = _extract_field(current_snapshot, "站點") or site_name or "網站"
     total_records = _extract_field(current_snapshot, "總筆數")
+    focus_keywords = _extract_focus_keywords(watch_description)
+    focused_added = _filter_items_by_keywords(added, focus_keywords)
+    focused_removed = _filter_items_by_keywords(removed, focus_keywords)
+    focus_hint = _build_focus_hint(focus_keywords, focused_added, focused_removed)
 
     if api_key and genai:
         ai_report = _ai_section_list_report(
@@ -83,6 +90,10 @@ def _section_list_report(
             added=added,
             removed=removed,
             current_items=curr_items,
+            watch_description=watch_description,
+            focus_keywords=focus_keywords,
+            focused_added=focused_added,
+            focused_removed=focused_removed,
             api_key=api_key,
             model_name=model_name,
         )
@@ -96,6 +107,9 @@ def _section_list_report(
         added=added,
         removed=removed,
         current_items=curr_items,
+        focus_hint=focus_hint,
+        focused_added=focused_added,
+        focused_removed=focused_removed,
         has_previous=bool(previous_snapshot),
     )
 
@@ -155,6 +169,9 @@ def _basic_section_list_report(
     added: list[dict[str, str]],
     removed: list[dict[str, str]],
     current_items: list[dict[str, str]],
+    focus_hint: str,
+    focused_added: list[dict[str, str]],
+    focused_removed: list[dict[str, str]],
     has_previous: bool,
 ) -> str:
     latest_date = _latest_item_date(current_items)
@@ -167,6 +184,8 @@ def _basic_section_list_report(
     if latest_date:
         lines.append(f"近三日共更新：{len(recent_three_day_items)} 則新聞")
         lines.append(f"近一日新增：{len(latest_day_added)} 則")
+    if focus_hint:
+        lines.append(focus_hint)
     lines.append(dash)
 
     if latest_day_added:
@@ -194,10 +213,24 @@ def _basic_section_list_report(
         for item in older_added[:5]:
             lines.append(f"  - [{item['date']}] {item['title']}")
 
+    if focused_added:
+        lines.append(dash)
+        lines.append("關注重點新增：")
+        for i, item in enumerate(focused_added[:5], 1):
+            lines.append(f"  {i}. [{item['date']}] {item['title']}")
+        if len(focused_added) > 5:
+            lines.append(f"  另有 {len(focused_added) - 5} 則符合關注條件的新增內容。")
+
     if removed:
         lines.append(dash)
         lines.append("移除內容：")
         for item in removed:
+            lines.append(f"  - [{item['date']}] {item['title']}")
+
+    if focused_removed:
+        lines.append(dash)
+        lines.append("關注重點移除：")
+        for item in focused_removed[:5]:
             lines.append(f"  - [{item['date']}] {item['title']}")
 
     return "\n".join(lines)
@@ -211,6 +244,10 @@ def _ai_section_list_report(
     added: list[dict[str, str]],
     removed: list[dict[str, str]],
     current_items: list[dict[str, str]],
+    watch_description: str | None,
+    focus_keywords: list[str],
+    focused_added: list[dict[str, str]],
+    focused_removed: list[dict[str, str]],
     api_key: str,
     model_name: str | None = None,
 ) -> str | None:
@@ -224,12 +261,16 @@ def _ai_section_list_report(
     recent_three_count = len(_items_since(current_items, latest_date, days=3))
     latest_day_added = _items_on_date(added, latest_date)
     latest_day_added_block = "\n".join(_format_item(item) for item in latest_day_added) or "（無近一日新增）"
+    focused_added_block = "\n".join(_format_item(item) for item in focused_added) or "（無符合關注條件的新增）"
+    focused_removed_block = "\n".join(_format_item(item) for item in focused_removed) or "（無符合關注條件的移除）"
 
     prompt = f"""你是網站更新通知摘要 Agent。
 請根據以下結構化列表差異，輸出繁體中文通知。只根據提供內容，不要臆測。
 
 【站點】{site_name}
 【區塊】{section_name}
+【使用者想追蹤的重點】{watch_description or "未指定"}
+【優先關鍵詞】{', '.join(focus_keywords) if focus_keywords else '未指定'}
 【目前總筆數】{total_records or "未知"}
 【最新日期】{latest_date.isoformat() if latest_date else "未知"}
 【近三日新聞數】{recent_three_count}
@@ -241,14 +282,21 @@ def _ai_section_list_report(
 【近一日新增項目（請優先 highlight）】
 {latest_day_added_block}
 
+【符合使用者關注重點的新增項目】
+{focused_added_block}
+
 【移除項目】
 {removed_block}
+
+【符合使用者關注重點的移除項目】
+{focused_removed_block}
 
 請輸出：
 1. 第一行：{site_name}更新｜{section_name}
 2. 第二、三行只寫「近三日共更新：N 則新聞」與「近一日新增：N 則」，不要輸出目前總筆數。
-3. 接著以「近一日新增重點」列出最多 5 則近一日新增，保留日期與標題。
-4. 若有其他日期新增或移除，再簡短列出數量與最多 3 則。
+3. 若有符合使用者關注重點的新增項目，優先以「關注重點新增」列出，聚焦法規、公告、澄清、公告送達或 watch_description 指向的資訊，不要被其他一般新聞分散。
+4. 接著以「近一日新增重點」列出最多 5 則近一日新增，保留日期與標題。
+5. 若有其他日期新增或移除，再簡短列出數量與最多 3 則。
 5. 最多 800 字，純文字，不使用 Markdown 標題。
 """
     try:
@@ -308,3 +356,86 @@ def _parse_date(value: str) -> date | None:
 def _normalize_item_date(value: str) -> str:
     parsed = _parse_date(value)
     return parsed.isoformat() if parsed else value
+
+
+def _extract_focus_keywords(watch_description: str | None) -> list[str]:
+    if not watch_description:
+        return []
+
+    # 精確提取：用特定句型從 watch_description 找出枚舉關鍵詞
+    # 例：「與法規、公告、政策發布、公告送達相關」「的澄清、說明、更正與公告送達資訊」
+    focused_segments: list[str] = []
+    precise_patterns = [
+        # 「與 A、B、C 相關」句型
+        r"與([\u4e00-\u9fff]{2,6}(?:[、，][\u4e00-\u9fff]{2,6}){1,10})相關",
+        # 「的 A、B、C 與 D 資訊/項目」句型
+        r"的([\u4e00-\u9fff]{2,6}(?:[、，][\u4e00-\u9fff]{2,6}){0,10}(?:與[\u4e00-\u9fff]{2,6})?)(?:資訊|項目)",
+        # 「追蹤/包含 A、B、C」句型
+        r"(?:追蹤|包含)([\u4e00-\u9fff]{2,6}(?:[、，][\u4e00-\u9fff]{2,6}){1,10})",
+    ]
+    for pattern in precise_patterns:
+        for seg in re.findall(pattern, watch_description):
+            focused_segments.extend(re.split(r"[、，與]", seg))
+
+    if focused_segments:
+        raw_tokens = [t.strip() for t in focused_segments if t.strip()]
+    else:
+        # Fallback：全文掃描
+        normalized = re.sub(r"[，。；、,/()（）「」]", " ", watch_description)
+        normalized = re.sub(r"(?:以及|與|及|和|或|跟)", " ", normalized)
+        raw_tokens = re.findall(r"[\u4e00-\u9fff]{2,6}", normalized)
+
+    stop_words = {
+        "追蹤", "最新", "資訊", "內容", "網站", "部分", "更新", "關注", "以及", "相關", "如果", "是否",
+        "這個", "頁面", "項目", "希望", "新增", "移除", "針對", "使用者", "自動", "網站的", "首頁",
+        "監測", "列表", "觀察", "整理", "忽略", "不要", "提供", "包含", "一般", "宣傳性", "其他",
+    }
+    keywords: list[str] = []
+    for token in raw_tokens:
+        token = re.sub(r"(?:相關|資訊|項目|的)$", "", token)
+        token = token.strip()
+        if not token or token in stop_words or token.isdigit() or len(token) < 2:
+            continue
+        if token not in keywords:
+            keywords.append(token)
+
+    synonym_map = {
+        "法規": ["法規", "法令", "命令", "草案", "修正", "規定", "辦法", "要點"],
+        "公告": ["公告", "公告事項", "公告送達", "送達"],
+        "公告送達": ["公告送達", "送達", "公告"],
+        "政策": ["政策", "政策發布", "政策公告"],
+        "政策發布": ["政策發布", "政策", "政策公告"],
+        "澄清": ["澄清", "更正", "說明"],
+        "本部新聞": ["本部新聞"],
+        "即時新聞澄清": ["即時新聞澄清", "澄清"],
+    }
+    expanded: list[str] = []
+    for keyword in keywords:
+        for expanded_keyword in synonym_map.get(keyword, [keyword]):
+            if expanded_keyword not in expanded:
+                expanded.append(expanded_keyword)
+    return expanded[:12]
+
+
+def _filter_items_by_keywords(items: list[dict[str, str]], keywords: list[str]) -> list[dict[str, str]]:
+    if not items or not keywords:
+        return []
+
+    matched: list[dict[str, str]] = []
+    for item in items:
+        haystack = " ".join(str(item.get(field, "")) for field in ("title", "date", "url")).lower()
+        if any(keyword.lower() in haystack for keyword in keywords):
+            matched.append(item)
+    return matched
+
+
+def _build_focus_hint(
+    keywords: list[str],
+    focused_added: list[dict[str, str]],
+    focused_removed: list[dict[str, str]],
+) -> str:
+    if not keywords:
+        return ""
+    if focused_added or focused_removed:
+        return f"關注條件命中：{', '.join(keywords[:5])}"
+    return f"關注條件：{', '.join(keywords[:5])}（本次未命中新增或移除項目）"

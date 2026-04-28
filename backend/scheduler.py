@@ -124,6 +124,7 @@ def run_check_subscription(sub_id: int, app) -> tuple[bool, str | None, bool, bo
                     site_name=sub.name or sub.url,
                     previous_snapshot=last.content_text or "",
                     current_snapshot=content_text,
+                    watch_description=sub.watch_description,
                     fallback_summary=diff_summary,
                     api_key=app.config.get("GEMINI_API_KEY") or None,
                     model_name=app.config.get("AI_SUMMARY_MODEL") or None,

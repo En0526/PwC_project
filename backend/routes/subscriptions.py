@@ -381,6 +381,7 @@ def get_diff(sub_id):
             site_name=sub.name or sub.url,
             previous_snapshot=old_t,
             current_snapshot=new_t,
+            watch_description=sub.watch_description,
             fallback_summary=fallback,
             api_key=current_app.config.get("GEMINI_API_KEY") or None,
             model_name=current_app.config.get("AI_SUMMARY_MODEL") or None,
