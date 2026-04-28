@@ -138,6 +138,14 @@ def get_presets() -> list[Preset]:
             watch_description="追蹤最新「新聞發布」，重點在於產業政策（如淨零碳排、AI 發展）及最新公告事項。",
         ),
         Preset(
+            id="mentor-ida-rss",
+            name="經濟部產業發展署－新聞 RSS",
+            url="https://www.ida.gov.tw/ctlr?PRO=rss.RSSView&t=1",
+            frequency="業師提供",
+            check_interval_minutes=360,
+            watch_description="RSS 格式，包含產業政策新聞、重大宣布及發展成果。比網頁版更及時（每 6 小時檢查），自動比對差異並推送通知。",
+        ),
+        Preset(
             id="mentor-labuan-legislation",
             name="Labuan Legislation",
             url="https://www.labuanfsa.gov.my/regulations/legislation/act",
