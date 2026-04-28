@@ -164,8 +164,6 @@ def _basic_section_list_report(
 
     dash = "-" * 32
     lines = [f"{site_name}更新｜{section_name}"]
-    if total_records:
-        lines.append(f"目前總筆數：{total_records}")
     if latest_date:
         lines.append(f"近三日共更新：{len(recent_three_day_items)} 則新聞")
         lines.append(f"近一日新增：{len(latest_day_added)} 則")
@@ -175,16 +173,12 @@ def _basic_section_list_report(
         lines.append("近一日新增重點：")
         for i, item in enumerate(latest_day_added[:5], 1):
             lines.append(f"  {i}. [{item['date']}] {item['title']}")
-            if item.get("url"):
-                lines.append(f"     {item['url']}")
         if len(latest_day_added) > 5:
             lines.append(f"  另有 {len(latest_day_added) - 5} 則近一日新增新聞。")
     elif added:
         lines.append("新增內容：")
         for i, item in enumerate(added[:5], 1):
             lines.append(f"  {i}. [{item['date']}] {item['title']}")
-            if item.get("url"):
-                lines.append(f"     {item['url']}")
         if len(added) > 5:
             lines.append(f"  另有 {len(added) - 5} 則新增新聞。")
     elif not has_previous:
@@ -252,7 +246,7 @@ def _ai_section_list_report(
 
 請輸出：
 1. 第一行：{site_name}更新｜{section_name}
-2. 第二、三行先寫「近三日共更新：N 則新聞」與「近一日新增：N 則」。
+2. 第二、三行只寫「近三日共更新：N 則新聞」與「近一日新增：N 則」，不要輸出目前總筆數。
 3. 接著以「近一日新增重點」列出最多 5 則近一日新增，保留日期與標題。
 4. 若有其他日期新增或移除，再簡短列出數量與最多 3 則。
 5. 最多 800 字，純文字，不使用 Markdown 標題。
@@ -269,9 +263,7 @@ def _ai_section_list_report(
 
 
 def _format_item(item: dict[str, str]) -> str:
-    url = item.get("url") or ""
-    suffix = f" | {url}" if url else ""
-    return f"[{item.get('date', '')}] {item.get('title', '')}{suffix}"
+    return f"[{item.get('date', '')}] {item.get('title', '')}"
 
 
 def _latest_item_date(items: list[dict[str, str]]) -> date | None:
