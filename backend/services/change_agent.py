@@ -9,6 +9,10 @@ from email.utils import parsedate_to_datetime
 from backend.services.diff_service import diff_to_summary
 from backend.services.gazette_diff_agent import generate_gazette_visual_report
 from backend.services.gazette_monitor_agent import is_gazette_url
+from backend.services.ntbna_monitor_agent import is_ntbna_news_url
+from backend.services.ntbna_diff_agent import generate_ntbna_diff_report
+from backend.services.chinatimes_monitor_agent import is_chinatimes_home_url
+from backend.services.chinatimes_diff_agent import generate_chinatimes_diff_report
 
 try:
     import google.generativeai as genai
@@ -28,6 +32,26 @@ def generate_change_report(
     model_name: str | None = None,
 ) -> str:
     """Generate a readable summary for a detected content change."""
+    if is_ntbna_news_url(url):
+        ntbna_report = generate_ntbna_diff_report(
+            previous_snapshot=previous_snapshot,
+            current_snapshot=current_snapshot,
+            api_key=api_key,
+            model_name=model_name,
+        )
+        if ntbna_report:
+            return ntbna_report
+
+    if is_chinatimes_home_url(url):
+        chinatimes_report = generate_chinatimes_diff_report(
+            previous_snapshot=previous_snapshot,
+            current_snapshot=current_snapshot,
+            api_key=api_key,
+            model_name=model_name,
+        )
+        if chinatimes_report:
+            return chinatimes_report
+
     if is_gazette_url(url):
         gazette_report = generate_gazette_visual_report(
             previous_snapshot=previous_snapshot,

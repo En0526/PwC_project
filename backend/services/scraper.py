@@ -26,6 +26,16 @@ from backend.services.gazette_monitor_agent import (
     gazette_snapshot_text,
     analyze_gazette_change,
 )
+from backend.services.ntbna_monitor_agent import (
+    is_ntbna_news_url,
+    extract_ntbna_structured,
+    ntbna_snapshot_text,
+)
+from backend.services.chinatimes_monitor_agent import (
+    is_chinatimes_home_url,
+    extract_chinatimes_structured,
+    chinatimes_snapshot_text,
+)
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
@@ -566,6 +576,32 @@ def scrape_and_extract(
             snapshot = gazette_snapshot_text(structured)
             h = content_hash(snapshot)
             return snapshot, h, {"status": "ok", "source": "gazette_agent", "confidence": 0.95, "hint": ""}
+        except ScrapeFailure:
+            raise
+        except Exception:
+            pass  # 解析失敗時 fallback 到一般流程
+
+    # 財政部北區國稅局 本局新聞稿 專屬 Agent 1 處理
+    if is_ntbna_news_url(url):
+        try:
+            html_raw, _ = fetch_page_detailed(url)
+            structured = extract_ntbna_structured(html_raw, url)
+            snapshot = ntbna_snapshot_text(structured)
+            h = content_hash(snapshot)
+            return snapshot, h, {"status": "ok", "source": "ntbna_agent", "confidence": 0.95, "hint": ""}
+        except ScrapeFailure:
+            raise
+        except Exception:
+            pass  # 解析失敗時 fallback 到一般流程
+
+    # 中時首頁即時新聞專屬 Agent 1 處理
+    if is_chinatimes_home_url(url):
+        try:
+            html_raw, _ = fetch_page_detailed(url)
+            structured = extract_chinatimes_structured(html_raw, url)
+            snapshot = chinatimes_snapshot_text(structured)
+            h = content_hash(snapshot)
+            return snapshot, h, {"status": "ok", "source": "chinatimes_agent", "confidence": 0.92, "hint": ""}
         except ScrapeFailure:
             raise
         except Exception:
