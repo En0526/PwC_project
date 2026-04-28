@@ -89,19 +89,19 @@ def extract_gazette_structured(html: str) -> dict:
         result["total_count"] = f"共{count_match.group(1)}筆資料"
 
     # ── 公報列表 ─────────────────────────────────────────────────────────────
-    # 頁面的每筆公報通常有類型標籤（法規、公告及送達）和標題連結
+    # 頁面的每筆正式公報都連到 detail.do；browseHistory 等功能連結不算項目。
     base_url = "https://gazette.nat.gov.tw"
     seen_titles: set[str] = set()
     for a_tag in soup.find_all("a", href=True):
         href = a_tag.get("href", "")
-        if "detail.do" not in href and "metaid" not in href:
+        if "detail.do" not in href:
             continue
         title = a_tag.get_text(strip=True)
         if not title or title in seen_titles or len(title) < 4:
             continue
         seen_titles.add(title)
 
-        # 取公報類型（在鄰近的文字節點或 class 中找）
+        # 取公報類型（用項目前方最近的類型標籤判斷）
         item_type = _guess_item_type(a_tag, soup)
 
         full_link = href if href.startswith("http") else base_url + href
@@ -116,7 +116,12 @@ def extract_gazette_structured(html: str) -> dict:
 
 def _guess_item_type(a_tag, soup) -> str:
     """嘗試從鄰近 DOM 節點推斷公報類型（法規 / 公告及送達 / 行政規則 …）。"""
-    known_types = ["法規", "行政規則", "公告及送達", "人事", "其他"]
+    known_types = ["法規", "行政規則", "公告及送達", "處分", "人事", "其他"]
+    for text_node in a_tag.find_all_previous(string=True):
+        text = text_node.strip()
+        if text in known_types:
+            return text
+
     # 往上找最近的父容器，看是否有類型文字
     for parent in a_tag.parents:
         text = parent.get_text(" ", strip=True)

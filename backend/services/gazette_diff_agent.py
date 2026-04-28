@@ -17,7 +17,7 @@ except ImportError:
     genai = None
 
 # 公報條目行的前綴格式（gazette_snapshot_text 產生的格式為「  [類型] 標題」）
-_ITEM_TYPES = ["法規", "行政規則", "公告及送達", "人事", "其他", "公報"]
+_ITEM_TYPES = ["法規", "行政規則", "公告及送達", "處分", "人事", "其他", "公報"]
 _METADATA_KEYS = {"卷期", "查詢條件", "出刊日期", "筆數", "公報列表"}
 
 

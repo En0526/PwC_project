@@ -18,6 +18,7 @@ except Exception:  # pragma: no cover - optional dependency
 
 from backend.services.gemini_service import extract_watch_content
 from backend.services.presets import get_presets
+from backend.services.section_agent import extract_section_snapshot
 from backend.services.stdtime_notify import format_stdtime_snapshot_from_api_body
 from backend.services.gazette_monitor_agent import (
     is_gazette_url,
@@ -430,7 +431,7 @@ def fetch_page_playwright(url: str, timeout: int = 20) -> tuple[str, str]:
 
 def _get_insecure_ssl_domains() -> set[str]:
     # 內建已知憑證異常站台（可再由 .env 擴充）
-    domains = {"www.ardf.org.tw", "law.moj.gov.tw"}
+    domains = {"www.ardf.org.tw", "law.moj.gov.tw", "gazette.nat.gov.tw"}
     # 常用清單中的網站一律視為 SSL 白名單（使用者要求）
     for p in get_presets():
         try:
@@ -667,6 +668,24 @@ def scrape_and_extract(
         h = content_hash(full_text)
         source = "playwright_html" if playwright_used else "html"
         return full_text, h, {"status": "ok", "source": source, "confidence": 0.8, "hint": ""}
+
+    section_snapshot = extract_section_snapshot(
+        url=url,
+        html=html,
+        full_text=full_text,
+        watch_description=watch_description.strip(),
+    )
+    if section_snapshot:
+        h = content_hash(section_snapshot.text)
+        source = "playwright_section_agent" if playwright_used else "section_agent"
+        return section_snapshot.text, h, {
+            "status": "ok",
+            "source": source,
+            "confidence": section_snapshot.confidence,
+            "hint": "",
+            "section": section_snapshot.section_name,
+            "site": section_snapshot.site_name,
+        }
 
     if use_gemini and gemini_api_key:
         try:

@@ -4,9 +4,9 @@ from flask import Blueprint, request, jsonify, current_app
 from flask_login import login_required, current_user
 
 from backend.models import db, Subscription, Snapshot, Notification
-from backend.services.scraper import scrape_and_extract
 from backend.services.diff_service import diff_to_summary
 from backend.services.stdtime_notify import is_stdtime_webclock_url, stdtime_diff_summary
+from backend.services.change_agent import generate_change_report
 from backend.scheduler import run_check_subscription
 
 CHECK_INTERVAL_OPTIONS = {
@@ -56,7 +56,17 @@ def parse_source_label(content_full):
     raw = (content_full or "").strip().lower()
     if raw.startswith("source:rss"):
         return "RSS"
+    if raw.startswith("source:gazette"):
+        return "行政院公報 Agent"
+    if raw.startswith("source:section"):
+        return "區塊 Agent"
+    if raw.startswith("source:playwright_section"):
+        return "瀏覽器區塊 Agent"
+    if raw.startswith("source:gemini") or raw.startswith("source:playwright_gemini"):
+        return "AI 區塊擷取"
     if raw.startswith("source:web"):
+        return "爬蟲"
+    if raw.startswith("source:html") or raw.startswith("source:playwright_html"):
         return "爬蟲"
     return None
 
@@ -256,7 +266,7 @@ def check_now(sub_id):
         "confidence": (diagnostic or {}).get("confidence"),
         "last_checked_at": to_taiwan_iso(sub.last_checked_at),
         "last_changed_at": to_taiwan_iso(sub.last_changed_at),
-        "source": parse_source_label(sub.snapshots[0].content_full) if sub and sub.snapshots else None,
+        "last_check_source": parse_source_label(sub.snapshots[0].content_full) if sub and sub.snapshots else None,
     })
 
 
@@ -365,7 +375,16 @@ def get_diff(sub_id):
     if is_stdtime_webclock_url(sub.url):
         summary = stdtime_diff_summary(old_t, new_t)
     if not summary:
-        summary = diff_to_summary(old_t, new_t)
+        fallback = diff_to_summary(old_t, new_t)
+        summary = generate_change_report(
+            url=sub.url,
+            site_name=sub.name or sub.url,
+            previous_snapshot=old_t,
+            current_snapshot=new_t,
+            fallback_summary=fallback,
+            api_key=current_app.config.get("GEMINI_API_KEY") or None,
+            model_name=current_app.config.get("AI_SUMMARY_MODEL") or None,
+        )
     return jsonify({
         "diff_summary": summary,
         "old_at": to_taiwan_iso(snapshots[1].captured_at),
