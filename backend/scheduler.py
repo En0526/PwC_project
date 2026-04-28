@@ -8,6 +8,8 @@ from backend.services.diff_service import diff_to_summary
 from backend.services.stdtime_notify import stdtime_diff_summary
 from backend.services.email_service import send_change_email
 from backend.services.blocked_sites import looks_like_anti_bot, record_blocked_site
+from backend.services.gazette_monitor_agent import is_gazette_url
+from backend.services.gazette_diff_agent import generate_gazette_visual_report
 
 STDTIME_CHECK_INTERVAL_SECONDS = 30
 
@@ -117,6 +119,15 @@ def run_check_subscription(sub_id: int, app) -> tuple[bool, str | None, bool, bo
                 readable_summary = stdtime_diff_summary(last.content_text or "", content_text)
                 if readable_summary:
                     diff_summary = readable_summary
+            # 行政院公報：使用 Agent 2 產生視覺化差異報告
+            if is_gazette_url(sub.url):
+                gazette_report = generate_gazette_visual_report(
+                    previous_snapshot=last.content_text or "",
+                    current_snapshot=content_text,
+                    api_key=app.config.get("GEMINI_API_KEY") or None,
+                )
+                if gazette_report:
+                    diff_summary = gazette_report
             mail_sent, mail_error = send_change_email(app, sub, diff_summary)
             
             # 創建應用內通知

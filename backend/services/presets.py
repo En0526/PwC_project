@@ -68,7 +68,7 @@ def get_presets() -> list[Preset]:
         Preset(
             id="tw-gazette",
             name="行政院公報資訊網",
-            url="https://gazette.nat.gov.tw/egFront/browseCategoryEg.do",
+            url="https://gazette.nat.gov.tw/egFront/browseVolume.do?action=doGroupQuery&chapter=4&log=filter&filterId=114",
             frequency="業師提供",
             check_interval_minutes=360,
             watch_description="追蹤最新「卷期瀏覽」，查詢條件鎖定「財政經濟篇」，並確認是否為最新期公報。",

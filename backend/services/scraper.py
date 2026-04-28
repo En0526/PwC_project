@@ -19,6 +19,12 @@ except Exception:  # pragma: no cover - optional dependency
 from backend.services.gemini_service import extract_watch_content
 from backend.services.presets import get_presets
 from backend.services.stdtime_notify import format_stdtime_snapshot_from_api_body
+from backend.services.gazette_monitor_agent import (
+    is_gazette_url,
+    extract_gazette_structured,
+    gazette_snapshot_text,
+    analyze_gazette_change,
+)
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
@@ -550,6 +556,19 @@ def scrape_and_extract(
     if st_text:
         h = content_hash(st_text)
         return st_text, h, {"status": "ok", "source": "stdtime", "confidence": 1.0, "hint": ""}
+
+    # 行政院公報資訊網專屬 Agent 1 處理
+    if is_gazette_url(url):
+        try:
+            html_raw, _ = fetch_page_detailed(url)
+            structured = extract_gazette_structured(html_raw)
+            snapshot = gazette_snapshot_text(structured)
+            h = content_hash(snapshot)
+            return snapshot, h, {"status": "ok", "source": "gazette_agent", "confidence": 0.95, "hint": ""}
+        except ScrapeFailure:
+            raise
+        except Exception:
+            pass  # 解析失敗時 fallback 到一般流程
 
     url_expects_rss = _url_expects_rss(url)
     playwright_used = False

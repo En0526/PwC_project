@@ -6,6 +6,9 @@ try:
 except ImportError:
     genai = None
 
+from backend.services.gazette_monitor_agent import is_gazette_url, analyze_gazette_change
+from backend.services.gazette_diff_agent import generate_gazette_visual_report
+
 
 def _env_bool(name: str, default: bool = False) -> bool:
     raw = (os.environ.get(name) or "").strip().lower()
@@ -69,3 +72,61 @@ def generate_diff_summary(
         return text[:1000]
     except Exception:
         return None
+
+
+def generate_diff_summary_for_url(
+    *,
+    url: str,
+    site_name: str,
+    source_type: str,
+    raw_diff_summary: str,
+    old_snapshot: str | None = None,
+    new_snapshot: str | None = None,
+    watch_description: str | None = None,
+    api_key: str | None = None,
+    model_name: str | None = None,
+) -> str | None:
+    """
+    智慧路由版 diff summary：
+    - 若為行政院公報網址，優先呼叫 Agent 1（監測報告）再呼叫 Agent 2（視覺化差異）。
+    - 其他網址使用原始 generate_diff_summary。
+    """
+    api_key = api_key or os.environ.get("GEMINI_API_KEY")
+
+    if is_gazette_url(url):
+        # Agent 1：監測分析（依 watch_description 解讀變更）
+        monitor_report = None
+        if watch_description and new_snapshot:
+            monitor_report = analyze_gazette_change(
+                watch_description=watch_description,
+                current_snapshot=new_snapshot,
+                previous_snapshot=old_snapshot,
+                api_key=api_key,
+                model_name=model_name,
+            )
+
+        # Agent 2：視覺化差異報告
+        visual_report = generate_gazette_visual_report(
+            previous_snapshot=old_snapshot,
+            current_snapshot=new_snapshot or raw_diff_summary,
+            api_key=api_key,
+            model_name=model_name,
+        )
+
+        parts = []
+        if monitor_report:
+            parts.append(monitor_report)
+        if visual_report:
+            parts.append(visual_report)
+        if parts:
+            return "\n\n".join(parts)[:3000]
+
+    # 其他網站走原始流程
+    return generate_diff_summary(
+        site_name=site_name,
+        url=url,
+        source_type=source_type,
+        raw_diff_summary=raw_diff_summary,
+        api_key=api_key,
+        model_name=model_name,
+    )
