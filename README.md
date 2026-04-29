@@ -166,3 +166,5 @@ D:\NTU_AI\
 ## 通知擴充
 
 目前「有變更」時僅在資料庫記錄並可於網頁上點「看差異」。若要改成 Email / Line / 推播通知，可在 `backend/scheduler.py` 的 `run_check_subscription` 中，於 `if last and last.content_hash != new_hash:` 區塊內加上發送邏輯（例如呼叫 SendGrid、Line Notify 等）。
+
+最後更新：2026-04-30 by chenweifanhub
