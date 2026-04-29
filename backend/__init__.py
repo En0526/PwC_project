@@ -1,12 +1,30 @@
 import os
 from flask import Flask
 from flask_login import LoginManager
+from sqlalchemy import inspect, text
 
 from backend.config import Config
 from backend.models import db, User
 
 # 專案根目錄（NTU_AI）
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _ensure_user_email_status_columns():
+    inspector = inspect(db.engine)
+    columns = {c["name"] for c in inspector.get_columns("users")}
+    statements = []
+    if "last_email_sent_at" not in columns:
+        statements.append("ALTER TABLE users ADD COLUMN last_email_sent_at DATETIME")
+    if "last_email_success" not in columns:
+        statements.append("ALTER TABLE users ADD COLUMN last_email_success BOOLEAN")
+    if "last_email_error" not in columns:
+        statements.append("ALTER TABLE users ADD COLUMN last_email_error TEXT")
+
+    for stmt in statements:
+        db.session.execute(text(stmt))
+    if statements:
+        db.session.commit()
 
 
 def create_app(config_class=Config):
@@ -47,5 +65,6 @@ def create_app(config_class=Config):
         app.register_blueprint(blocked_sites_bp, url_prefix="/api/blocked-sites")
         app.register_blueprint(pages_bp)
         db.create_all()
+        _ensure_user_email_status_columns()
 
     return app

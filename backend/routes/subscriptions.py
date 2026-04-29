@@ -410,6 +410,9 @@ def list_notifications():
         "notifications": [serialize_notification(n) for n in notifications],
         "has_more": Notification.query.filter_by(user_id=current_user.id).count() > NOTIFICATION_PREVIEW_LIMIT,
         "unread_count": unread_count,
+        "last_email_sent_at": to_taiwan_iso(current_user.last_email_sent_at),
+        "last_email_success": current_user.last_email_success,
+        "last_email_error": current_user.last_email_error,
     })
 
 

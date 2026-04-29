@@ -307,6 +307,23 @@
             .then(function (data) {
                 var notifications = (data && data.notifications) ? data.notifications : [];
                 var hasMore = data && data.has_more;
+                var mailStatusEl = qs('mail-status');
+
+                if (mailStatusEl) {
+                    if (!data || !data.last_email_sent_at) {
+                        mailStatusEl.textContent = '最近寄信：尚無紀錄';
+                    } else {
+                        var t = new Date(data.last_email_sent_at).toLocaleString('zh-TW');
+                        if (data.last_email_success === true) {
+                            mailStatusEl.textContent = '最近寄信：' + t + '（成功）';
+                        } else if (data.last_email_success === false) {
+                            var reason = data.last_email_error ? ('，原因：' + data.last_email_error) : '';
+                            mailStatusEl.textContent = '最近寄信：' + t + '（失敗' + reason + '）';
+                        } else {
+                            mailStatusEl.textContent = '最近寄信：' + t;
+                        }
+                    }
+                }
 
                 var unreadBadge = qs('unread-count');
                 if (unreadBadge) {

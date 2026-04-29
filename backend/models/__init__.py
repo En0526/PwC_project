@@ -10,6 +10,9 @@ class User(UserMixin, db.Model):
     email = db.Column(db.String(120), unique=True, nullable=False)
     password_hash = db.Column(db.String(256), nullable=False)
     created_at = db.Column(db.DateTime, server_default=db.func.now())
+    last_email_sent_at = db.Column(db.DateTime, nullable=True)
+    last_email_success = db.Column(db.Boolean, nullable=True)
+    last_email_error = db.Column(db.Text, nullable=True)
 
     subscriptions = db.relationship("Subscription", backref="user", lazy=True, cascade="all, delete-orphan")
     notifications = db.relationship("Notification", backref="user", lazy=True, cascade="all, delete-orphan")

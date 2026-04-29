@@ -130,6 +130,9 @@ def run_check_subscription(sub_id: int, app) -> tuple[bool, str | None, bool, bo
                     model_name=app.config.get("AI_SUMMARY_MODEL") or None,
                 )
             mail_sent, mail_error = send_change_email(app, sub, diff_summary)
+            sub.user.last_email_sent_at = now
+            sub.user.last_email_success = bool(mail_sent)
+            sub.user.last_email_error = mail_error
             
             # 創建應用內通知
             notification = Notification(
