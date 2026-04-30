@@ -3,7 +3,7 @@
 {% block content %}
 <div class="dashboard">
     <h1>我的追蹤網站</h1>
-    <p class="dashboard-desc">新增網址並描述你想「觀看是否有更新」的區塊，系統會定時檢查並在有變更時讓你查看差異。</p>
+    <p class="dashboard-desc">新增網址並描述你想「觀看是否有更新」的區塊，系統會定時檢查並在有變更時讓你查看差異。<strong>支援 RSS 與一般網頁：</strong>貼入 feed 或像 NewsRSSdetail 的網址時會自動以新聞項目比對；一般頁面會擷取 HTML，並可用描述指定要追蹤的區塊。</p>
 
     <div class="dashboard-grid">
         <aside class="dashboard-aside dashboard-aside-left">
@@ -20,7 +20,8 @@
             <section class="add-subscription">
                 <h2>新增追蹤</h2>
                 <form id="form-add-sub">
-                    <label>網址 <input type="url" id="sub-url" required placeholder="https://example.com/page"></label>
+                    <label>網址 <input type="url" id="sub-url" required placeholder="https://example.com/page（可貼 RSS 或一般網頁）"></label>
+                    <small id="sub-url-hint" class="sub-url-hint" aria-live="polite"></small>
                     <label>自訂名稱（選填）<input type="text" id="sub-name" placeholder="例如：台大公告、產品頁"></label>
                     <label>要觀看是否有更新的部分（選填）<br><small>例如：公告列表、最新消息區塊、價格表。留空則監測整頁變更。系統會搭配 AI 擷取你描述的區塊。</small><textarea id="sub-watch" rows="3" placeholder="例：頁面上的「最新公告」列表"></textarea></label>
                     <label>自動檢查頻率

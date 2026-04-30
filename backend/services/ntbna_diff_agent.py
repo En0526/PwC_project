@@ -99,7 +99,6 @@ def _basic_ntbna_diff(
     if total:
         lines.append(f"目前總筆數：{total}")
     lines.append(f"本次新增：{len(added)} 則")
-    lines.append(f"本次移除：{len(removed)} 則")
     lines.append("-" * 32)
 
     if added:
@@ -112,12 +111,6 @@ def _basic_ntbna_diff(
             lines.append(f"  {i}. [{item['date']}] {item['title']}")
     else:
         lines.append("列表有變化，但沒有新增新聞。")
-
-    if removed:
-        lines.append("-" * 32)
-        lines.append("移除新聞：")
-        for item in removed[:10]:
-            lines.append(f"  - [{item['date']}] {item['title']}")
 
     return "\n".join(lines)
 

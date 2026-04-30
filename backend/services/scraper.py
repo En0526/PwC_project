@@ -5,7 +5,9 @@ import re
 import ssl
 import warnings
 import xml.etree.ElementTree as ET
-from urllib.parse import urlparse, urlunparse
+from datetime import timedelta, timezone
+from email.utils import parsedate_to_datetime
+from urllib.parse import parse_qs, urlparse, urlunparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -36,8 +38,14 @@ from backend.services.chinatimes_monitor_agent import (
     extract_chinatimes_structured,
     chinatimes_snapshot_text,
 )
+from backend.services.mops_monitor_agent import (
+    is_mops_realtime_url,
+    fetch_mops_realtime_structured,
+    mops_snapshot_text,
+)
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+TAIWAN_TZ = timezone(timedelta(hours=8))
 
 DEFAULT_HEADERS = {
     "User-Agent": USER_AGENT,
@@ -56,21 +64,58 @@ class ScrapeFailure(RuntimeError):
         self.http_status = http_status
 
 
+RSS_URL_HINTS = (
+    "/feed",
+    "/feeds/",
+    "/rss/",
+    "/rss?",
+    ".rss",
+    "/atom/",
+    ".xml",
+    "rssdetail",
+    "newsrss",
+    "rssview",
+    "format=rss",
+    "type=rss",
+    "output=rss",
+    "pro=rss",
+)
+
+
+def url_suggests_rss_feed(url: str) -> bool:
+    """URL 字面上像 RSS／Atom／政府 NewsRSSdetail 這類 endpoint。"""
+    u = (url or "").lower().strip()
+    if not u:
+        return False
+    return any(h in u for h in RSS_URL_HINTS)
+
+
 def _url_expects_rss(url: str) -> bool:
-    """判斷 URL 是否看起來應該提供 RSS/Atom feed（基於 URL 路徑）。"""
-    u = (url or "").lower()
-    return any(k in u for k in ("/feed", "/rss", "/atom", ".xml"))
+    """與 url_suggests_rss_feed 相同；抓取失敗時用於對應 RSS 專用錯誤訊息。"""
+    return url_suggests_rss_feed(url)
+
+
+def _content_looks_like_rss(content_type: str, body: str) -> bool:
+    """依 Content-Type 或正文開頭判定為 feed/XML（不包含僅 URL 推測）。"""
+    ct = (content_type or "").lower().strip()
+    if ct:
+        media_type = ct.split(";", 1)[0].strip()
+        if media_type in {"application/rss+xml", "application/atom+xml"}:
+            return True
+        if media_type in {"application/xml", "text/xml"}:
+            return True
+    sample = (body or "")[:800].lstrip()
+    head_low = sample.lower()
+    if head_low.startswith("<?xml") and ("<rss" in head_low or "<feed" in head_low):
+        return True
+    if "<rss" in head_low[:200] or "<feed" in head_low[:200]:
+        return True
+    return False
 
 
 def _is_probably_rss(url: str, content_type: str, body: str) -> bool:
-    u = (url or "").lower()
-    ct = (content_type or "").lower()
-    head = (body or "")[:300].lstrip().lower()
-    if any(k in u for k in ("/feed", "/rss", "/atom", ".xml")):
-        return True
-    if any(k in ct for k in ("application/rss+xml", "application/atom+xml", "application/xml", "text/xml")):
-        return True
-    return head.startswith("<?xml") and ("<rss" in head or "<feed" in head)
+    """是否應先嘗試以 RSS／Atom 解析（內容像 feed，或 URL 暗示 feed）。"""
+    return url_suggests_rss_feed(url) or _content_looks_like_rss(content_type, body)
 
 
 def _rss_entry_text(entry: dict) -> str:
@@ -80,6 +125,71 @@ def _rss_entry_text(entry: dict) -> str:
     date = (entry.get("date") or "").strip()
     parts = [x for x in (guid, title, date, link) if x]
     return " | ".join(parts)
+
+
+def _normalize_rss_date(value: str) -> str:
+    if not value:
+        return ""
+    try:
+        dt = parsedate_to_datetime(value.replace("CST", "+0800"))
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(TAIWAN_TZ)
+        return dt.date().isoformat()
+    except (TypeError, ValueError, IndexError, AttributeError):
+        pass
+    match = re.search(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})", value)
+    if match:
+        return f"{match.group(1)}-{int(match.group(2)):02d}-{int(match.group(3)):02d}"
+    return value.strip()
+
+
+def _normalize_rss_time(value: str) -> str:
+    if not value:
+        return ""
+    try:
+        dt = parsedate_to_datetime(value.replace("CST", "+0800"))
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(TAIWAN_TZ)
+        return dt.strftime("%H:%M")
+    except (TypeError, ValueError, IndexError, AttributeError):
+        match = re.search(r"(\d{1,2}):(\d{2})", value)
+        return f"{int(match.group(1)):02d}:{match.group(2)}" if match else ""
+
+
+def _child_text_by_name(element: ET.Element, name: str) -> str:
+    wanted = name.lower()
+    for child in list(element):
+        tag = _strip_ns(child.tag).lower()
+        if tag == wanted or tag.endswith(f".{wanted}"):
+            return (child.text or "").strip()
+    return ""
+
+
+def _normalize_rss_publisher(value: str, site_name: str = "") -> str:
+    publisher = (value or "").strip()
+    if re.fullmatch(r"\d+(?:\.\d+)+", publisher):
+        return ""
+    publisher = re.sub(r"^版權來自[:：]\s*", "", publisher)
+    publisher = re.sub(r"^版權所有\s*\d{4}\s*,\s*", "", publisher)
+    if publisher.upper().startswith("RSS"):
+        return ""
+    site = (site_name or "").strip()
+    if site and publisher.startswith(site) and len(publisher) > len(site):
+        publisher = publisher[len(site):].strip()
+    return publisher
+
+
+def _first_rss_publisher(item: ET.Element, site_name: str) -> str:
+    for value in (
+        _child_text_by_name(item, "creator"),
+        _child_text_by_name(item, "publisher"),
+        _child_text_by_name(item, "rights"),
+        item.findtext("author") or "",
+    ):
+        publisher = _normalize_rss_publisher(value, site_name)
+        if publisher:
+            return publisher
+    return ""
 
 
 def detect_rss_feeds(html: str, base_url: str = "") -> list[dict]:
@@ -231,7 +341,163 @@ def _strip_ns(tag: str) -> str:
     return tag
 
 
-def parse_rss_snapshot(xml_text: str, max_items: int = 20) -> str:
+def _channel_child_text(channel: ET.Element, *local_names: str) -> str:
+    wanted = {n.lower() for n in local_names}
+    for child in list(channel):
+        tag = _strip_ns(child.tag).lower()
+        if tag in wanted:
+            return (child.text or "").strip()
+    return ""
+
+
+# 產業發展署 RSSView：t≠1 時為單一整支分類。t=1 時官方聯播常混「新聞發布」「產業大小事」，需依 item 連結區分。
+_IDA_RSS_T_TO_SECTION: dict[int, str] = {
+    2: "產業發展法令規章",
+    3: "招標公告",
+    4: "政府出版品",
+    6: "政府資訊公開",
+    7: "業者常見問答",
+    8: "施政措施",
+    10: "業務活動訊息",
+}
+
+
+def _ida_rss_feed_t_parameter(source_url: str | None) -> int | None:
+    if not source_url:
+        return None
+    m = re.search(r"[\?&]t=(\d+)", source_url, flags=re.IGNORECASE)
+    return int(m.group(1)) if m else None
+
+
+def _ida_rss_is_news_and_insights_feed(source_url: str | None) -> bool:
+    if not source_url or "ida.gov.tw" not in source_url.lower() or "rssview" not in source_url.lower():
+        return False
+    return _ida_rss_feed_t_parameter(source_url) == 1
+
+
+_ida_newsview_lane_cache: dict[int, str] = {}
+_MAX_IDA_NEWSVIEW_LANE_CACHE = 512
+
+
+def _ida_newsview_article_id(link: str) -> int | None:
+    try:
+        q = parse_qs(urlparse(link.replace("&amp;", "&")).query)
+        pro = (q.get("PRO") or [""])[0].lower()
+        if not pro.endswith("newsview"):
+            return None
+        ids = q.get("id") or []
+        if not ids:
+            return None
+        return int(str(ids[0]).strip())
+    except (ValueError, TypeError):
+        return None
+
+
+def _ida_lane_from_breadcrumb_html(html: str) -> str:
+    """自 NewsView 內容頁麵包屑判斷「產業大小事」；失敗則歸新聞發布。"""
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        area = soup.select_one("div.idbBreadcrumbArea")
+        if area is None:
+            return "新聞發布"
+        crumb = area.select_one("span.idbBreadcrumb")
+        if crumb is None:
+            return "新聞發布"
+        for a in crumb.find_all("a", href=True):
+            href = (a.get("href") or "").lower()
+            if "type=insights" in href:
+                return "產業大小事"
+            text = (a.get_text() or "").strip()
+            title = (a.get("title") or "").strip()
+            if "產業大小事" in text or "產業大小事" in title:
+                return "產業大小事"
+        return "新聞發布"
+    except Exception:
+        return "新聞發布"
+
+
+def _ida_fetch_and_cache_newsview_lane(article_id: int) -> str | None:
+    """擷取單篇 NewsView 麵包屑以分類；失敗不寫入快取。"""
+    try:
+        html, _ = fetch_page_detailed(
+            f"https://www.ida.gov.tw/ctlr?PRO=news.NewsView&id={article_id}&lang=0",
+            timeout=10,
+        )
+    except ScrapeFailure:
+        return None
+    lane = _ida_lane_from_breadcrumb_html(html)
+    _ida_newsview_lane_cache[article_id] = lane
+    while len(_ida_newsview_lane_cache) > _MAX_IDA_NEWSVIEW_LANE_CACHE:
+        _ida_newsview_lane_cache.pop(next(iter(_ida_newsview_lane_cache)))
+    return lane
+
+
+def _ida_rss_sidebar_lane_for_t1_article_link(link: str | None) -> str:
+    """首頁>新聞發布 vs 產業大小事：連結含 Insights 者、或 NewsView 麵包屑含產業大小事；其餘歸新聞發布。"""
+    lk = (link or "").strip().replace("&amp;", "&")
+    if not lk:
+        return "新聞發布"
+    try:
+        p = urlparse(lk)
+        qlow = parse_qs(p.query.lower())
+        for vals in qlow.values():
+            for val in vals:
+                if "insights" in val:
+                    return "產業大小事"
+                if val in ("insights", "insight"):
+                    return "產業大小事"
+        if "insights" in p.path.lower():
+            return "產業大小事"
+    except Exception:
+        pass
+    low = lk.lower()
+    if "insights" in low.replace("%26", "&"):
+        return "產業大小事"
+    if "ida.gov.tw" in low:
+        nid = _ida_newsview_article_id(lk)
+        if nid is not None:
+            if nid in _ida_newsview_lane_cache:
+                return _ida_newsview_lane_cache[nid]
+            got = _ida_fetch_and_cache_newsview_lane(nid)
+            if got is not None:
+                return got
+    return "新聞發布"
+
+
+def _finalize_ida_rss_snapshot_headers(
+    source_url: str | None,
+    site_name: str,
+    section_name: str,
+    entries: list[dict],
+) -> tuple[str, str]:
+    """覆寫 [站點]／[區塊]，使與經濟部產業發展署官網側欄語意一致。"""
+    if not source_url or "ida.gov.tw" not in source_url.lower() or "rssview" not in source_url.lower():
+        return site_name, section_name
+
+    tp = _ida_rss_feed_t_parameter(source_url)
+    org = "經濟部產業發展署"
+
+    if tp == 1:
+        lanes = {e.get("lane") for e in entries if e.get("lane")}
+        lanes.discard("")
+        if not lanes:
+            return org, "新聞發布／產業大小事"
+        if lanes == {"產業大小事"}:
+            section = "產業大小事"
+        elif lanes == {"新聞發布"}:
+            section = "新聞發布"
+        else:
+            section = "新聞發布／產業大小事"
+        return org, section
+
+    leaf = _IDA_RSS_T_TO_SECTION.get(tp) if tp is not None else None
+    if leaf:
+        return org, leaf
+
+    return site_name, section_name
+
+
+def parse_rss_snapshot(xml_text: str, max_items: int = 50, *, source_url: str | None = None) -> str:
     """將 RSS / Atom 轉為穩定文字快照，避免誤判。"""
     try:
         root = ET.fromstring(xml_text)
@@ -245,19 +511,34 @@ def parse_rss_snapshot(xml_text: str, max_items: int = 20) -> str:
 
     root_name = _strip_ns(root.tag).lower()
     entries: list[dict] = []
+    feed_title = ""
+    feed_description = ""
 
     if root_name in ("rss", "rdf"):
+        channel = root.find(".//channel")
+        if channel is not None:
+            feed_title = _channel_child_text(channel, "title")
+            feed_description = _channel_child_text(channel, "description")
         for item in root.findall(".//item")[:max_items]:
+            date_text = (
+                _child_text_by_name(item, "pubDate")
+                or (item.findtext("pubDate") or item.findtext("updated") or "").strip()
+                or _child_text_by_name(item, "date")
+            ).strip()
+            feed_site_name = feed_title.split(" - ", 1)[0].strip()
             entries.append(
                 {
                     "title": (item.findtext("title") or "").strip(),
                     "link": (item.findtext("link") or "").strip(),
                     "guid": (item.findtext("guid") or "").strip(),
-                    "date": (item.findtext("pubDate") or item.findtext("updated") or "").strip(),
+                    "date": _normalize_rss_date(date_text),
+                    "time": _normalize_rss_time(date_text),
+                    "publisher": _first_rss_publisher(item, feed_site_name),
                 }
             )
     elif root_name == "feed":
         ns = {"a": "http://www.w3.org/2005/Atom"}
+        feed_title = (root.findtext("a:title", default="", namespaces=ns) or "").strip()
         atom_entries = root.findall("a:entry", ns)
         for item in atom_entries[:max_items]:
             link_el = item.find("a:link", ns)
@@ -270,10 +551,14 @@ def parse_rss_snapshot(xml_text: str, max_items: int = 20) -> str:
                     "link": link,
                     "guid": (item.findtext("a:id", default="", namespaces=ns) or "").strip(),
                     "date": (
-                        item.findtext("a:updated", default="", namespaces=ns)
-                        or item.findtext("a:published", default="", namespaces=ns)
-                        or ""
-                    ).strip(),
+                        _normalize_rss_date(
+                            (
+                                item.findtext("a:updated", default="", namespaces=ns)
+                                or item.findtext("a:published", default="", namespaces=ns)
+                                or ""
+                            ).strip()
+                        )
+                    ),
                 }
             )
     else:
@@ -284,15 +569,65 @@ def parse_rss_snapshot(xml_text: str, max_items: int = 20) -> str:
             retryable=False,
         )
 
-    lines = [_rss_entry_text(entry) for entry in entries if _rss_entry_text(entry)]
-    if not lines:
+    entry_lines = [entry for entry in entries if (entry.get("title") or "").strip()]
+    if not entry_lines:
         raise ScrapeFailure(
             code="rss_parse_failed",
             message="RSS 解析成功但找不到 item/entry。",
             hint="此 feed 可能無資料或格式特殊，請改用其他來源。",
             retryable=False,
         )
+    tag_t1_lane = _ida_rss_is_news_and_insights_feed(source_url)
+    if tag_t1_lane:
+        for entry in entry_lines:
+            entry["lane"] = _ida_rss_sidebar_lane_for_t1_article_link(entry.get("link"))
+
+    site_name, section_name = _rss_snapshot_labels(feed_title, feed_description)
+    site_name, section_name = _finalize_ida_rss_snapshot_headers(
+        source_url, site_name, section_name, entry_lines
+    )
+    lines = [
+        f"[站點] {site_name}",
+        f"[區塊] {section_name}",
+        f"[筆數] {len(entry_lines)}",
+        "[新聞列表]",
+    ]
+    for entry in entry_lines:
+        date = (entry.get("date") or "").strip()
+        title = (entry.get("title") or "").strip().lstrip("▍").strip()
+        link = (entry.get("link") or "").strip()
+        publisher = (entry.get("publisher") or "").strip()
+        time = (entry.get("time") or "").strip()
+        if publisher or time:
+            details = " ".join(part for part in (publisher, time) if part)
+            title = f"{title}（{details}）"
+        lane = (entry.get("lane") or "").strip()
+        if date and lane and tag_t1_lane:
+            lines.append(f"  [{date}][{lane}] {title} | {link}")
+        elif date:
+            lines.append(f"  [{date}] {title} | {link}")
+        else:
+            lines.append(_rss_entry_text(entry))
     return "\n".join(lines)
+
+
+def _rss_snapshot_labels(feed_title: str, feed_description: str) -> tuple[str, str]:
+    title = (feed_title or "").strip()
+    description = (feed_description or "").strip()
+    if "--" in title:
+        site, section = [part.strip() for part in title.split("--", 1)]
+        if site and section:
+            return site, section
+    if " - " in title:
+        parts = [part.strip() for part in title.split(" - ") if part.strip() and part.strip().upper() != "RSS"]
+        if len(parts) >= 2:
+            section = " > ".join(parts[1:])
+            if parts[0] == "經濟部" and section == "本部新聞":
+                section = "新聞與公告 > 本部新聞"
+            return parts[0], section
+    if description:
+        return description, title or "RSS"
+    return title or "RSS", "RSS"
 
 
 def _looks_dynamic_unreadable(html: str, text: str) -> bool:
@@ -528,6 +863,65 @@ def content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()
 
 
+def classify_subscription_url(url: str, timeout: int = 12) -> dict:
+    """GET 網址並粗分「RSS feed」或「一般網頁」，供新增追蹤表單即時提示。
+
+    回傳鍵：ok, mode (rss|web|rss_broken), hint, feed_title (可選), code (失敗時)。
+    實際抓取仍由 scrape_and_extract 再判斷一次，與此結果一致。
+    """
+    url = (url or "").strip()
+    if not url:
+        return {"ok": False, "mode": None, "hint": "請輸入網址。"}
+
+    try:
+        body, content_type = fetch_page_detailed(url, timeout=timeout)
+    except ScrapeFailure as e:
+        return {
+            "ok": False,
+            "mode": None,
+            "hint": e.hint or e.message,
+            "code": e.code,
+            "retryable": e.retryable,
+        }
+
+    feed_like_content = _content_looks_like_rss(content_type, body)
+    url_feed = url_suggests_rss_feed(url)
+
+    if not feed_like_content and not url_feed:
+        return {
+            "ok": True,
+            "mode": "web",
+            "hint": "偵測為一般網頁：將擷取 HTML；可依需要填「要觀看的區塊」以對焦比對。",
+        }
+
+    try:
+        snap = parse_rss_snapshot(body, source_url=url)
+        site_label = ""
+        for line in snap.splitlines():
+            s = line.strip()
+            if s.startswith("[站點]"):
+                site_label = s.split("]", 1)[-1].strip()
+                break
+        return {
+            "ok": True,
+            "mode": "rss",
+            "hint": "偵測為 RSS／Atom：將比對新聞項目列表。「要觀看的區塊」可留空。",
+            "feed_title": site_label or None,
+        }
+    except ScrapeFailure:
+        if feed_like_content:
+            return {
+                "ok": True,
+                "mode": "rss_broken",
+                "hint": "回應像 RSS／XML，但無法解析為有效 feed；請確認網址或改用網頁監測。",
+            }
+        return {
+            "ok": True,
+            "mode": "web",
+            "hint": "連結類似 RSS endpoint，但目前內容可改以一般網頁監測；建議視情況填寫區塊描述。",
+        }
+
+
 def scrape_stdtime_clock(url: str, watch_description: str | None) -> str | None:
     """stdtime.gov.tw/WebClock 特殊處理：取 /Home/GetServerTime 的時間值。"""
     if "stdtime" not in url.lower() or "webclock" not in url.lower():
@@ -607,6 +1001,18 @@ def scrape_and_extract(
         except Exception:
             pass  # 解析失敗時 fallback 到一般流程
 
+    # 公開資訊觀測站 MOPS 即時重大資訊是 Vue SPA，HTML 只會回傳空殼；直接使用其 JSON API。
+    if is_mops_realtime_url(url):
+        try:
+            structured = fetch_mops_realtime_structured()
+            snapshot = mops_snapshot_text(structured)
+            h = content_hash(snapshot)
+            return snapshot, h, {"status": "ok", "source": "mops_agent", "confidence": 0.96, "hint": ""}
+        except requests.RequestException:
+            raise
+        except Exception:
+            pass  # API 失敗時 fallback 到一般流程
+
     url_expects_rss = _url_expects_rss(url)
     playwright_used = False
 
@@ -661,22 +1067,22 @@ def scrape_and_extract(
             else:
                 raise e
 
-    # fetch 成功，檢查內容格式
-    if _is_probably_rss(url, content_type, html):
-        # 內容看起來像 RSS，解析之
-        rss_text = parse_rss_snapshot(html)
-        h = content_hash(rss_text)
-        return rss_text, h, {"status": "ok", "source": "rss", "confidence": 0.95, "hint": ""}
-    elif url_expects_rss:
-        # URL 看起來像 RSS，但伺服器返回非 RSS 內容（例如 HTML 登入頁、403 頁面等）
-        raise ScrapeFailure(
-            code="rss_not_found",
-            message=f"指定的 RSS 源返回非 RSS 內容（Content-Type: {content_type})。",
-            hint="此連結不提供 RSS feed（可能是登入頁、錯誤頁等）。請改用其他 RSS 源，或改為監測網站的一般 HTML 頁面。",
-            retryable=False,
-        )
+    # fetch 成功：先依「內容像 feed」或「URL 像 feed endpoint」嘗試 RSS／Atom；
+    # 若僅 URL 像 feed 但正文為 HTML／解析失敗，改走下方一般網頁流程（自動區分）。
+    feed_like_content = _content_looks_like_rss(content_type, html)
+    should_try_feed = feed_like_content or url_expects_rss
 
-    # 內容是 HTML，轉為文本
+    if should_try_feed:
+        try:
+            rss_text = parse_rss_snapshot(html, source_url=url)
+            h = content_hash(rss_text)
+            return rss_text, h, {"status": "ok", "source": "rss", "confidence": 0.95, "hint": ""}
+        except ScrapeFailure:
+            if feed_like_content:
+                raise
+            # 僅 URL 類似 RSS：允許退回 HTML 監測
+
+    # 內容是 HTML（或非 feed／feed 解析已放棄），轉為文本
     full_text = html_to_clean_text(html)
 
     if _looks_dynamic_unreadable(html, full_text):

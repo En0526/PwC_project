@@ -110,7 +110,6 @@ def _ai_visual_report(
         return None
 
     added_block = "\n".join(f"{i+1}. {item}" for i, item in enumerate(added_items)) or "（無新增）"
-    removed_block = "\n".join(f"- {item}" for item in removed_items) if removed_items else ""
     vol_change = f"{prev_vol} → {curr_vol}" if previous_snapshot else f"{curr_vol}（首次建立基準）"
 
     prompt = f"""你是「行政院公報通知精煉 Agent」。
@@ -123,8 +122,6 @@ def _ai_visual_report(
 【本期新增公報條目】
 {added_block}
 
-{f"【本期移除公報條目】\n{removed_block}" if removed_block else ""}
-
 請以純文字輸出以下格式（不使用 Markdown 符號）：
 
 行政院公報更新｜財政經濟篇
@@ -134,7 +131,6 @@ def _ai_visual_report(
 ────────────────────────
 本期公報內容：
 （依序列出新增條目，格式：序號. [類型] 簡明標題，不要超過一行）
-{f"────────────────────────\n移除項目：\n（列出移除條目）" if removed_block else ""}
 ────────────────────────
 重點摘要：
 （2-3 點，每點以「•」開頭，說明本期法規或公告的核心影響）
@@ -143,6 +139,7 @@ def _ai_visual_report(
 1. 只輸出有實際意義的公報條目（法規、行政規則、公告及送達等），不輸出欄位名稱或系統資訊。
 2. 標題可縮短但不可扭曲原意。
 3. 若為首次建立基準，重點摘要改為「首次建立監測基準，目前公報內容如上」。
+4. 不要輸出任何移除項目或移除數量。
 """
 
     try:
@@ -201,11 +198,5 @@ def _basic_visual_report(
             lines.append(f"  {i}. {item}")
     else:
         lines.append("本期公報與上期一致，無新增項目。")
-
-    if removed:
-        lines.append(dash)
-        lines.append("本期移除項目：")
-        for item in removed:
-            lines.append(f"  • {item}")
 
     return "\n".join(lines)

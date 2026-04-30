@@ -117,7 +117,6 @@ def _basic_diff(
     lines = [
         "MOPS 即時重大資訊更新｜首頁 > 即時重大資訊",
         f"本次新增：{len(added)} 筆",
-        f"本次移除：{len(removed)} 筆",
         "-" * 40,
     ]
     if added:
@@ -137,14 +136,6 @@ def _basic_diff(
     else:
         lines.append("資訊列表有變化，但沒有新增筆數。")
 
-    if removed:
-        lines.append("-" * 40)
-        lines.append("移除資訊：")
-        for item in removed[:10]:
-            lines.append(
-                f"  - [{item['code']}] {item['company']} "
-                f"({item['time']}) | {item['title']}"
-            )
     return "\n".join(lines)
 
 

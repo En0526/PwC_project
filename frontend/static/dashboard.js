@@ -16,6 +16,22 @@
         return (Number.isInteger(m) ? m : m.toFixed(1)) + ' 月';
     }
 
+    function fmtTaiwanTime(value) {
+        if (!value) return '';
+        var date = new Date(value);
+        if (Number.isNaN(date.getTime())) return value;
+        return date.toLocaleString('zh-TW', {
+            timeZone: 'Asia/Taipei',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: true
+        });
+    }
+
     function init() {
         const listEl = qs('sub-list');
         const form = qs('form-add-sub');
@@ -24,6 +40,7 @@
         const intervalCustomInput = qs('sub-interval-custom');
         const notifEl = qs('notif-list');
         const expandLink = qs('expand-notifications');
+        var notificationsExpanded = false;
 
         if (!listEl || !form) {
             alert('前端初始化失敗：找不到必要的 DOM（請重新整理頁面）。');
@@ -272,8 +289,47 @@
         return div.innerHTML;
     }
 
+    function cleanNotificationSummary(text) {
+        var lines = (text || '').split('\n');
+        var cleaned = [];
+        var skipRemovalBlock = false;
+        lines.forEach(function (line) {
+            var trimmed = line.trim();
+            var isSeparator = /^-{3,}$/.test(trimmed);
+            var isRemovalHeader = (
+                trimmed.indexOf('移除內容') === 0 ||
+                trimmed.indexOf('移除資訊') === 0 ||
+                trimmed.indexOf('移除新聞') === 0 ||
+                trimmed.indexOf('移除項目') === 0 ||
+                trimmed.indexOf('本期移除項目') === 0 ||
+                trimmed.indexOf('關注重點移除') === 0
+            );
+            if (trimmed.indexOf('關注條件') === 0 || trimmed.indexOf('本次移除') === 0) {
+                return;
+            }
+            if (isRemovalHeader) {
+                skipRemovalBlock = true;
+                if (cleaned.length && /^-{3,}$/.test(cleaned[cleaned.length - 1].trim())) {
+                    cleaned.pop();
+                }
+                return;
+            }
+            if (skipRemovalBlock) {
+                if (isSeparator) {
+                    skipRemovalBlock = false;
+                }
+                return;
+            }
+            cleaned.push(line);
+        });
+        while (cleaned.length && /^-{3,}$/.test(cleaned[cleaned.length - 1].trim())) {
+            cleaned.pop();
+        }
+        return cleaned.join('\n');
+    }
+
     function renderNotificationCard(n) {
-        var created = n.created_at ? new Date(n.created_at).toLocaleString('zh-TW') : '';
+        var created = fmtTaiwanTime(n.created_at);
         var className = n.is_read ? 'notif-card read' : 'notif-card unread';
         var messageText = n.message || '';
         if (n.diff_summary && messageText.indexOf('有更新：') !== -1) {
@@ -284,7 +340,7 @@
             diffHtml =
                 '<div class="notif-diff">' +
                 '<div class="notif-diff-title">差異摘要</div>' +
-                '<pre class="notif-diff-content">' + escapeHtml(n.diff_summary) + '</pre>' +
+                '<pre class="notif-diff-content">' + escapeHtml(cleanNotificationSummary(n.diff_summary)) + '</pre>' +
                 '</div>';
         }
         return (
@@ -302,6 +358,10 @@
 
     function loadNotifications() {
         if (!notifEl) return;
+        if (notificationsExpanded) {
+            loadAllNotifications();
+            return;
+        }
         fetch('/api/subscriptions/notifications', { credentials: 'same-origin' })
             .then(function (r) { return r.json(); })
             .then(function (data) {
@@ -313,7 +373,7 @@
                     if (!data || !data.last_email_sent_at) {
                         mailStatusEl.textContent = '最近寄信：尚無紀錄';
                     } else {
-                        var t = new Date(data.last_email_sent_at).toLocaleString('zh-TW');
+                        var t = fmtTaiwanTime(data.last_email_sent_at);
                         if (data.last_email_success === true) {
                             mailStatusEl.textContent = '最近寄信：' + t + '（成功）';
                         } else if (data.last_email_success === false) {
@@ -345,6 +405,7 @@
 
                 if (expandLink) {
                     expandLink.style.display = hasMore ? 'block' : 'none';
+                    expandLink.textContent = '展開全部';
                 }
 
                 notifEl.querySelectorAll('.btn-mark-read').forEach(function (btn) {
@@ -368,6 +429,7 @@
 
     function loadAllNotifications() {
         if (!notifEl) return;
+        notificationsExpanded = true;
         fetch('/api/subscriptions/notifications/all', { credentials: 'same-origin' })
             .then(function (r) { return r.json(); })
             .then(function (data) {
@@ -381,12 +443,8 @@
                 notifEl.innerHTML = notifications.map(renderNotificationCard).join('');
 
                 if (expandLink) {
-                    expandLink.style.display = 'none';
+                    expandLink.style.display = 'block';
                     expandLink.textContent = '收起';
-                    expandLink.addEventListener('click', function () {
-                        loadNotifications();
-                        expandLink.textContent = '展開全部';
-                    });
                 }
 
                 notifEl.querySelectorAll('.btn-mark-read').forEach(function (btn) {
@@ -470,7 +528,7 @@
         btn.textContent = '檢查中…';
         var cardEl = btn && btn.closest ? btn.closest('.sub-card') : null;
         var controller = new AbortController();
-        var timeoutId = setTimeout(function () { controller.abort(); }, 25000);
+        var timeoutId = setTimeout(function () { controller.abort(); }, 45000);
         fetch('/api/subscriptions/' + id + '/check', { method: 'POST', credentials: 'same-origin', signal: controller.signal })
             .then(function (r) {
                 if (!r.ok) return r.json().then(function (d) { throw new Error(d.error || ('HTTP ' + r.status)); });
@@ -511,6 +569,7 @@
                     if (data.changed) {
                         var diffBox = cardEl ? cardEl.querySelector('.diff-placeholder') : null;
                         if (diffBox) showDiff(id, diffBox);
+                        alert('檢查完成：發現更新，已建立最新通知。');
                     }
                     else {
                         var src = data.source ? ('（來源：' + data.source + '）') : '';
@@ -519,13 +578,14 @@
                     }
                 }
                 loadSubscriptions();
+                loadNotifications();
             })
             .catch(function (err) {
                 clearTimeout(timeoutId);
                 btn.disabled = false;
                 btn.textContent = '立即檢查';
                 if (err && err.name === 'AbortError') {
-                    alert('立即檢查逾時（25 秒）。\n可能網站太慢或被擋，請稍後重試。');
+                    alert('立即檢查逾時（45 秒）。\n可能網站太慢或被擋，請稍後重試。');
                     return;
                 }
                 var msg = (err && err.message) ? err.message : '未知錯誤';
@@ -672,6 +732,69 @@
             });
     }
 
+        var subUrlField = qs('sub-url');
+        var urlHintEl = qs('sub-url-hint');
+        var urlClassifyTimer = null;
+        var classifySeq = 0;
+
+        function setUrlKindHint(text, toneClass) {
+            if (!urlHintEl) return;
+            urlHintEl.textContent = text || '';
+            urlHintEl.className = 'sub-url-hint' + (toneClass ? ' ' + toneClass : '');
+        }
+
+        function scheduleUrlKindClassify() {
+            if (!subUrlField) return;
+            clearTimeout(urlClassifyTimer);
+            var u = (subUrlField.value || '').trim();
+            if (!u || u.length < 8 || !/^https?:\/\//i.test(u)) {
+                setUrlKindHint('', '');
+                return;
+            }
+            var mySeq = ++classifySeq;
+            urlClassifyTimer = setTimeout(function () {
+                fetch('/api/subscriptions/url/classify', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: u })
+                })
+                    .then(function (r) {
+                        return r.json();
+                    })
+                    .then(function (data) {
+                        if (mySeq !== classifySeq) return;
+                        if (data.error) {
+                            setUrlKindHint('', '');
+                            return;
+                        }
+                        if (!data.ok) {
+                            var w = data.hint ? '無法預覽此網址：' + data.hint + ' 仍可嘗試新增。' : '';
+                            setUrlKindHint(w, 'url-hint-warn');
+                            return;
+                        }
+                        var prefix = data.mode === 'rss' ? '【RSS】' : data.mode === 'rss_broken' ? '【RSS 異常】' : '【網頁】';
+                        var extra = data.feed_title ? data.feed_title + ' — ' : '';
+                        var tone =
+                            data.mode === 'rss'
+                                ? 'url-hint-rss'
+                                : data.mode === 'rss_broken'
+                                  ? 'url-hint-warn'
+                                  : 'url-hint-web';
+                        setUrlKindHint(prefix + extra + (data.hint || ''), tone);
+                    })
+                    .catch(function () {
+                        if (mySeq !== classifySeq) return;
+                        setUrlKindHint('', '');
+                    });
+            }, 550);
+        }
+
+        if (subUrlField) {
+            subUrlField.addEventListener('input', scheduleUrlKindClassify);
+            subUrlField.addEventListener('change', scheduleUrlKindClassify);
+        }
+
         form.addEventListener('submit', function (e) {
         e.preventDefault();
         var url = document.getElementById('sub-url').value.trim();
@@ -698,6 +821,7 @@
                 document.getElementById('sub-interval').value = '1440';
                 if (intervalCustomInput) intervalCustomInput.value = '';
                 toggleCustomIntervalInput();
+                setUrlKindHint('', '');
                 loadSubscriptions();
             })
             .catch(function (err) {
@@ -723,9 +847,10 @@
     }
     if (expandLink) {
         expandLink.addEventListener('click', function () {
-            if (expandLink.textContent === '展開全部') {
+            if (!notificationsExpanded) {
                 loadAllNotifications();
             } else {
+                notificationsExpanded = false;
                 loadNotifications();
                 expandLink.textContent = '展開全部';
             }

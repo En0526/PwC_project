@@ -76,7 +76,6 @@ def _basic_diff(
     lines = [
         "中時新聞網更新｜首頁 > 即時新聞",
         f"本次新增：{len(added)} 則",
-        f"本次移除：{len(removed)} 則",
         "-" * 32,
     ]
     if added:
@@ -90,11 +89,6 @@ def _basic_diff(
     else:
         lines.append("列表有變化，但沒有新增即時新聞。")
 
-    if removed:
-        lines.append("-" * 32)
-        lines.append("移除新聞：")
-        for item in removed[:8]:
-            lines.append(f"  - [{item['time']}] {item['category']} | {item['title']}")
     return "\n".join(lines)
 
 
