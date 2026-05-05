@@ -12,7 +12,10 @@ class Config:
     GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") or ""
     AI_SUMMARY_ENABLED = (os.environ.get("AI_SUMMARY_ENABLED") or "0").strip() in ("1", "true", "True", "yes", "YES")
     AI_SUMMARY_MODEL = os.environ.get("AI_SUMMARY_MODEL") or "gemini-1.5-flash"
+    # 相容舊環境變數名（僅備註；實際「多久輪詢一次」請用 SCHEDULER_POLL_MINUTES）
     CHECK_INTERVAL_MINUTES = int(os.environ.get("CHECK_INTERVAL_MINUTES") or "30")
+    # 排程每隔多少「分鐘」喚醒一次，對所有訂閱做「是否到期」判斷。必須 <= 最短的訂閱間隔才會準時（預設 1）。
+    SCHEDULER_POLL_MINUTES = max(1, int(os.environ.get("SCHEDULER_POLL_MINUTES") or "1"))
 
     # Email notifications (optional)
     SMTP_HOST = os.environ.get("SMTP_HOST") or ""

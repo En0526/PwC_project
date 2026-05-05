@@ -14,6 +14,16 @@ from backend.services.screenshot_service import capture_page_screenshot
 
 STDTIME_CHECK_INTERVAL_SECONDS = 30
 CHECK_RUN_LOCK = threading.Lock()
+_SUBSCRIPTION_CHECK_LOCKS: dict[int, threading.Lock] = {}
+_SUBSCRIPTION_LOCKS_GUARD = threading.Lock()
+
+
+def _subscription_check_lock(sub_id: int) -> threading.Lock:
+    """同一訂閱序號同時間只允許一個 run_check_subscription（避免排程與手動檢查並行→重複通知）。"""
+    with _SUBSCRIPTION_LOCKS_GUARD:
+        if sub_id not in _SUBSCRIPTION_CHECK_LOCKS:
+            _SUBSCRIPTION_CHECK_LOCKS[sub_id] = threading.Lock()
+        return _SUBSCRIPTION_CHECK_LOCKS[sub_id]
 
 
 def _is_mof_family_subscription(sub: Subscription) -> bool:
@@ -21,13 +31,18 @@ def _is_mof_family_subscription(sub: Subscription) -> bool:
     return "mof.gov.tw" in url or "ntbna.gov.tw" in url
 
 
-def _latest_snapshot_has_screenshot(sub_id: int) -> bool:
-    latest = (
+def _latest_snapshot_for_subscription(subscription_id: int) -> Snapshot | None:
+    """以 captured_at + id 排序，確保「最新」在並行寫入時仍穩定。"""
+    return (
         Snapshot.query
-        .filter_by(subscription_id=sub_id)
-        .order_by(Snapshot.captured_at.desc())
+        .filter_by(subscription_id=subscription_id)
+        .order_by(Snapshot.captured_at.desc(), Snapshot.id.desc())
         .first()
     )
+
+
+def _latest_snapshot_has_screenshot(sub_id: int) -> bool:
+    latest = _latest_snapshot_for_subscription(sub_id)
     if not latest:
         return False
     return "|screenshot:" in (latest.content_full or "")
@@ -58,10 +73,15 @@ def run_check_subscription(sub_id: int, app) -> tuple[bool, str | None, bool, bo
       - 動態頁面類型: html_dynamic_unreadable
       - 其他: timeout, connection_error, ssl_error 等
     """
+    with _subscription_check_lock(sub_id):
+        return _run_check_subscription_impl(sub_id, app)
+
+
+def _run_check_subscription_impl(sub_id: int, app) -> tuple[bool, str | None, bool, bool | None, str | None, dict]:
     with app.app_context():
         sub = Subscription.query.get(sub_id)
         if not sub:
-            return False, "找不到訂閱", False, None, None
+            return False, "找不到訂閱", False, None, None, {"status": "not_found"}
         now = datetime.utcnow()
         try:
             content_text, new_hash, scrape_meta = scrape_and_extract(
@@ -119,18 +139,41 @@ def run_check_subscription(sub_id: int, app) -> tuple[bool, str | None, bool, bo
                 "source": "scraper",
             }
 
-        last = sub.snapshots[0] if sub.snapshots else None
         sub.last_checked_at = now
+        latest = _latest_snapshot_for_subscription(sub.id)
 
+        # 本次擷取與資料庫最新版相同：不重複發通知／不重複寫快照（涵蓋短時間連續檢查）
+        if latest and latest.content_hash and latest.content_hash == new_hash:
+            db.session.commit()
+            return True, None, False, None, None, {
+                "status": "ok",
+                "hint": scrape_meta.get("hint") or "",
+                "retryable": True,
+                "http_status": None,
+                "source": scrape_meta.get("source") or "unknown",
+                "confidence": scrape_meta.get("confidence"),
+                "diff_summary": None,
+                "dedupe": "content_hash_unchanged",
+            }
+
+        last = latest
+        diff_summary: str | None = None
         changed = bool(last and last.content_hash != new_hash)
         mail_sent: bool | None = None
         mail_error: str | None = None
         meaningful_change = False
+        suppressed_duplicate_race = False
 
         if changed:
             # 檢查變化是否具有意義
             meaningful_change = _is_meaningful_change(last.content_text or "", content_text)
-            
+
+        if changed and meaningful_change:
+            race_latest = _latest_snapshot_for_subscription(sub.id)
+            if race_latest and race_latest.content_hash and race_latest.content_hash == new_hash:
+                meaningful_change = False
+                suppressed_duplicate_race = True
+
         if changed and meaningful_change:
             sub.last_changed_at = now
             diff_summary = diff_to_summary(last.content_text or "", content_text)
@@ -194,16 +237,19 @@ def run_check_subscription(sub_id: int, app) -> tuple[bool, str | None, bool, bo
         if screenshot_web_path:
             content_full_meta += f"|screenshot:{screenshot_web_path}"
 
-        snapshot = Snapshot(
-            subscription_id=sub.id,
-            content_hash=new_hash,
-            content_text=content_text[:50000],
-            content_full=content_full_meta,
-        )
-        db.session.add(snapshot)
+        final_latest = _latest_snapshot_for_subscription(sub.id)
+        if not (final_latest and final_latest.content_hash and final_latest.content_hash == new_hash):
+            snapshot = Snapshot(
+                subscription_id=sub.id,
+                content_hash=new_hash,
+                content_text=content_text[:50000],
+                content_full=content_full_meta,
+            )
+            db.session.add(snapshot)
 
         db.session.commit()
-        return True, None, changed, mail_sent, mail_error, {
+        reported_changed = changed and not suppressed_duplicate_race
+        return True, None, reported_changed, mail_sent, mail_error, {
             "status": "ok",
             "hint": scrape_meta.get("hint") or "",
             "retryable": True,
@@ -267,8 +313,14 @@ def _run_all_checks_internal(app, stdtime_only: bool = False):
 
 
 def init_scheduler(app):
-    """啟動背景排程：每 N 分鐘檢查一次所有訂閱。"""
-    interval_minutes = max(1, int(app.config.get("CHECK_INTERVAL_MINUTES", 30)))
+    """
+    啟動背景排程。
+
+    注意：每則訂閱的「檢查間隔」由 Subscription.check_interval_minutes 決定；
+    此處的輪詢間隔（SCHEDULER_POLL_MINUTES）是「多久喚醒一次去看誰到期」。
+    若輪詢設成 30 分鐘、訂閱卻設每 1 分鐘，實際最多每 30 分鐘才會被評估一次。
+    """
+    poll_minutes = max(1, int(app.config.get("SCHEDULER_POLL_MINUTES", 1)))
 
     def job():
         run_all_checks(app)
@@ -279,7 +331,7 @@ def init_scheduler(app):
     def run_schedule():
         import schedule
         import time
-        schedule.every(interval_minutes).minutes.do(job)
+        schedule.every(poll_minutes).minutes.do(job)
         schedule.every(STDTIME_CHECK_INTERVAL_SECONDS).seconds.do(stdtime_job)
         job()  # 啟動時先跑一次
         while True:

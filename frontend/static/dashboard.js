@@ -60,8 +60,8 @@
                     return;
                 }
                 listEl.innerHTML = data.subscriptions.map(function (s) {
-                    var lastCheck = s.last_checked_at ? new Date(s.last_checked_at).toLocaleString('zh-TW') : '尚未檢查';
-                    var lastChange = s.last_changed_at ? new Date(s.last_changed_at).toLocaleString('zh-TW') : '-';
+                    var lastCheck = s.last_checked_at ? fmtTaiwanTime(s.last_checked_at) : '尚未檢查';
+                    var lastChange = s.last_changed_at ? fmtTaiwanTime(s.last_changed_at) : '-';
                     var sourceLabel = s.last_check_source ? ('　來源：' + escapeHtml(s.last_check_source)) : '';
                     return (
                         '<div class="sub-card" data-id="' + s.id + '">' +

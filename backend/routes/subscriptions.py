@@ -1,9 +1,9 @@
 """訂閱的 CRUD 與手動檢查、取得差異。"""
-from datetime import timezone, timedelta
 from flask import Blueprint, request, jsonify, current_app, send_file
 from flask_login import login_required, current_user
 from io import BytesIO
 
+from backend.timeutil import to_taiwan_iso
 from backend.models import db, Subscription, Snapshot, Notification
 from backend.services.diff_service import diff_to_summary
 from backend.services.stdtime_notify import is_stdtime_webclock_url, stdtime_diff_summary
@@ -23,16 +23,7 @@ CHECK_INTERVAL_OPTIONS = {
 }
 
 subscriptions_bp = Blueprint("subscriptions", __name__)
-TW_TZ = timezone(timedelta(hours=8))
 NOTIFICATION_PREVIEW_LIMIT = 6
-
-
-def to_taiwan_iso(dt):
-    if not dt:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(TW_TZ).isoformat()
 
 
 def interval_label(minutes):
@@ -96,7 +87,7 @@ def serialize_notification(n, diff_cache=None):
         "message": display_message,
         "diff_summary": diff_summary,
         "is_read": n.is_read,
-        "created_at": n.created_at.isoformat() if n.created_at else None,
+        "created_at": to_taiwan_iso(n.created_at),
     }
 
 

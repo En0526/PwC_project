@@ -1167,17 +1167,41 @@ def scrape_and_extract(
         return full_text, h, {"status": "ok", "source": source, "confidence": 0.8, "hint": ""}
 
     if use_gemini and gemini_api_key:
+        refined_watch = watch_description.strip()
+        agent3_diag = None
+        try:
+            from backend.services.page_target_agent import (
+                page_target_diagnostic,
+                resolve_page_target,
+            )
+
+            pr = resolve_page_target(
+                url=url,
+                html=html[:200_000],
+                full_text=full_text[:50_000],
+                user_target=refined_watch,
+                api_key=gemini_api_key,
+            )
+            if pr:
+                refined_watch = pr.extraction_instruction
+                agent3_diag = page_target_diagnostic(pr)
+        except Exception:
+            pass
+
         try:
             extracted = extract_watch_content(
                 html=html[:100_000],
                 full_text=full_text[:50_000],
-                watch_description=watch_description.strip(),
+                watch_description=refined_watch,
                 api_key=gemini_api_key,
             )
             if extracted:
                 h = content_hash(extracted)
                 source = "playwright_gemini" if playwright_used else "gemini"
-                return extracted, h, {"status": "ok", "source": source, "confidence": 0.85, "hint": ""}
+                meta: dict = {"status": "ok", "source": source, "confidence": 0.85, "hint": ""}
+                if agent3_diag:
+                    meta["page_target_agent"] = agent3_diag
+                return extracted, h, meta
         except Exception:
             pass  # 失敗時 fallback 到全文
 

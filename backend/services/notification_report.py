@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from io import BytesIO
 from typing import Iterable
 from xml.sax.saxutils import escape
@@ -14,6 +15,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from backend.models import Snapshot
+from backend.timeutil import format_taiwan_wallclock
 
 
 def _register_cjk_font() -> str:
@@ -182,7 +184,7 @@ def build_notifications_pdf(
 
     rows = [
         [
-            Paragraph("<b>時間</b>", cell_style),
+            Paragraph("<b>時間（台灣）</b>", cell_style),
             Paragraph("<b>訂閱ID</b>", cell_style),
             Paragraph("<b>狀態</b>", cell_style),
             Paragraph("<b>事件</b>", cell_style),
@@ -207,7 +209,7 @@ def build_notifications_pdf(
         )
 
     for n in latest_changed_notifications:
-        created = n.created_at.strftime("%Y-%m-%d %H:%M:%S") if n.created_at else "-"
+        created = format_taiwan_wallclock(n.created_at)
         event_title, _ = _parse_notification_message(n.message or "")
         before_text, after_text = _get_before_after_text(n.subscription_id)
         before_img_path, after_img_path = _get_before_after_images(n.subscription_id)
@@ -252,11 +254,13 @@ def build_notifications_pdf(
         )
     )
 
+    gen_line = f"產生時間（台灣）：{format_taiwan_wallclock(datetime.now(timezone.utc))}"
     story = [
         Paragraph("最新通知報告", title_style),
         Spacer(1, 4 * mm),
         Paragraph(f"使用者：{user_email}", normal),
         Paragraph(f"筆數上限：{max_rows}", normal),
+        Paragraph(gen_line, normal),
         Spacer(1, 5 * mm),
         table,
     ]
