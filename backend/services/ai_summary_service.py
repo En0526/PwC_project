@@ -8,6 +8,8 @@ except ImportError:
 
 from backend.services.gazette_monitor_agent import is_gazette_url, analyze_gazette_change
 from backend.services.gazette_diff_agent import generate_gazette_visual_report
+from backend.services.labuanfsa_monitor_agent import is_labuanfsa_url, analyze_labuanfsa_change
+from backend.services.labuanfsa_diff_agent import generate_labuanfsa_visual_report
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -107,6 +109,34 @@ def generate_diff_summary_for_url(
 
         # Agent 2：視覺化差異報告
         visual_report = generate_gazette_visual_report(
+            previous_snapshot=old_snapshot,
+            current_snapshot=new_snapshot or raw_diff_summary,
+            api_key=api_key,
+            model_name=model_name,
+        )
+
+        parts = []
+        if monitor_report:
+            parts.append(monitor_report)
+        if visual_report:
+            parts.append(visual_report)
+        if parts:
+            return "\n\n".join(parts)[:3000]
+
+    if is_labuanfsa_url(url):
+        # Agent 1: monitoring analysis from watch_description.
+        monitor_report = None
+        if watch_description and new_snapshot:
+            monitor_report = analyze_labuanfsa_change(
+                watch_description=watch_description,
+                current_snapshot=new_snapshot,
+                previous_snapshot=old_snapshot,
+                api_key=api_key,
+                model_name=model_name,
+            )
+
+        # Agent 2: visual diff report for meaningful list changes.
+        visual_report = generate_labuanfsa_visual_report(
             previous_snapshot=old_snapshot,
             current_snapshot=new_snapshot or raw_diff_summary,
             api_key=api_key,

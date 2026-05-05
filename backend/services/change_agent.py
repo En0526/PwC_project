@@ -9,6 +9,8 @@ from email.utils import parsedate_to_datetime
 from backend.services.diff_service import diff_to_summary
 from backend.services.gazette_diff_agent import generate_gazette_visual_report
 from backend.services.gazette_monitor_agent import is_gazette_url
+from backend.services.labuanfsa_monitor_agent import is_labuanfsa_url
+from backend.services.labuanfsa_diff_agent import generate_labuanfsa_visual_report
 from backend.services.ntbna_monitor_agent import is_ntbna_news_url
 from backend.services.ntbna_diff_agent import generate_ntbna_diff_report
 from backend.services.chinatimes_monitor_agent import is_chinatimes_home_url
@@ -95,6 +97,16 @@ def generate_change_report(
         )
         if gazette_report:
             return gazette_report
+
+    if is_labuanfsa_url(url):
+        labuan_report = generate_labuanfsa_visual_report(
+            previous_snapshot=previous_snapshot,
+            current_snapshot=current_snapshot,
+            api_key=api_key,
+            model_name=model_name,
+        )
+        if labuan_report:
+            return labuan_report
 
     list_report = _section_list_report(
         site_name=site_name,

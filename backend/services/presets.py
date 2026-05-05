@@ -180,10 +180,10 @@ def get_presets() -> list[Preset]:
         Preset(
             id="mentor-labuan-media",
             name="Labuan Media",
-            url="https://www.labuanibfc.com/resources-events/media/press-releases",
+            url="https://www.labuanfsa.gov.my/resources/media",
             frequency="業師提供",
             check_interval_minutes=30,
-            watch_description="追蹤最新新聞資訊，包含新聞稿（Press Releases）以及重要演講稿（Speeches）。",
+            watch_description="只監測 Media 列表區塊（All/Press Releases/Speeches 下方）的日期、類型與標題，重點確認最新日期是否更新，並追蹤新增/移除項目。",
         ),
         Preset(
             id="mentor-oecd-beps",
