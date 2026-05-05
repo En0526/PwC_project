@@ -9,8 +9,28 @@ from backend.services.stdtime_notify import stdtime_diff_summary
 from backend.services.email_service import send_change_email
 from backend.services.blocked_sites import looks_like_anti_bot, record_blocked_site
 from backend.services.change_agent import generate_change_report
+from backend.services.notification_report import build_notifications_pdf
+from backend.services.screenshot_service import capture_page_screenshot
 
 STDTIME_CHECK_INTERVAL_SECONDS = 30
+CHECK_RUN_LOCK = threading.Lock()
+
+
+def _is_mof_family_subscription(sub: Subscription) -> bool:
+    url = (sub.url or "").lower()
+    return "mof.gov.tw" in url or "ntbna.gov.tw" in url
+
+
+def _latest_snapshot_has_screenshot(sub_id: int) -> bool:
+    latest = (
+        Snapshot.query
+        .filter_by(subscription_id=sub_id)
+        .order_by(Snapshot.captured_at.desc())
+        .first()
+    )
+    if not latest:
+        return False
+    return "|screenshot:" in (latest.content_full or "")
 
 
 def _is_meaningful_change(old_content: str, new_content: str) -> bool:
@@ -129,10 +149,6 @@ def run_check_subscription(sub_id: int, app) -> tuple[bool, str | None, bool, bo
                     api_key=app.config.get("GEMINI_API_KEY") or None,
                     model_name=app.config.get("AI_SUMMARY_MODEL") or None,
                 )
-            mail_sent, mail_error = send_change_email(app, sub, diff_summary)
-            sub.user.last_email_sent_at = now
-            sub.user.last_email_success = bool(mail_sent)
-            sub.user.last_email_error = mail_error
             
             # 創建應用內通知
             notification = Notification(
@@ -141,12 +157,48 @@ def run_check_subscription(sub_id: int, app) -> tuple[bool, str | None, bool, bo
                 message=f"您的訂閱 '{sub.name or sub.url}' 有更新：{diff_summary[:1000]}"
             )
             db.session.add(notification)
+            report_pdf_bytes: bytes | None = None
+            if bool(app.config.get("AUTO_SEND_NOTIFICATION_REPORT", True)):
+                limit = max(1, min(int(app.config.get("NOTIFICATION_REPORT_LIMIT", 20) or 20), 100))
+                notifications = (
+                    Notification.query
+                    .filter_by(user_id=sub.user.id)
+                    .order_by(Notification.created_at.desc())
+                    .limit(limit)
+                    .all()
+                )
+                report_pdf_bytes = build_notifications_pdf(
+                    notifications,
+                    user_email=sub.user.email,
+                    max_rows=limit,
+                )
+
+            mail_sent, mail_error = send_change_email(
+                app,
+                sub,
+                diff_summary,
+                pdf_bytes=report_pdf_bytes,
+            )
+            sub.user.last_email_sent_at = now
+            sub.user.last_email_success = bool(mail_sent)
+            sub.user.last_email_error = mail_error
+
+        screenshot_web_path = None
+        should_capture = changed and meaningful_change
+        # 財政部相關網站：即使本次未判定變更，也補一張基準截圖，避免 PDF 長期空白。
+        if not should_capture and _is_mof_family_subscription(sub) and not _latest_snapshot_has_screenshot(sub.id):
+            should_capture = True
+        if should_capture:
+            screenshot_web_path = capture_page_screenshot(sub.url)
+        content_full_meta = f"source:{scrape_meta.get('source') or 'unknown'}"
+        if screenshot_web_path:
+            content_full_meta += f"|screenshot:{screenshot_web_path}"
 
         snapshot = Snapshot(
             subscription_id=sub.id,
             content_hash=new_hash,
             content_text=content_text[:50000],
-            content_full=f"source:{scrape_meta.get('source') or 'unknown'}",
+            content_full=content_full_meta,
         )
         db.session.add(snapshot)
 
@@ -168,6 +220,16 @@ def _is_stdtime_subscription(sub: Subscription) -> bool:
 
 def run_all_checks(app, stdtime_only: bool = False):
     """檢查所有訂閱（由排程或手動呼叫）。"""
+    if not CHECK_RUN_LOCK.acquire(blocking=False):
+        return
+    try:
+        _run_all_checks_internal(app, stdtime_only=stdtime_only)
+    finally:
+        CHECK_RUN_LOCK.release()
+
+
+def _run_all_checks_internal(app, stdtime_only: bool = False):
+    """Internal: run checks with caller-managed lock."""
     now = datetime.utcnow()
     with app.app_context():
         subs = Subscription.query.all()
@@ -200,7 +262,7 @@ def run_all_checks(app, stdtime_only: bool = False):
         try:
             run_check_subscription(sub_id, app)
         except Exception:
-            pass
+            app.logger.exception("run_all_checks failed for subscription_id=%s", sub_id)
 
 
 def init_scheduler(app):

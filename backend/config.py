@@ -21,6 +21,9 @@ class Config:
     SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD") or ""
     SMTP_FROM = os.environ.get("SMTP_FROM") or ""
     SMTP_USE_TLS = (os.environ.get("SMTP_USE_TLS") or "1").strip() not in ("0", "false", "False", "no", "NO")
+    AUTO_SEND_NOTIFICATION_REPORT = (os.environ.get("AUTO_SEND_NOTIFICATION_REPORT") or "1").strip() in ("1", "true", "True", "yes", "YES")
+    NOTIFICATION_REPORT_LIMIT = int(os.environ.get("NOTIFICATION_REPORT_LIMIT") or "20")
+    NOTIFICATION_REPORT_COOLDOWN_MINUTES = int(os.environ.get("NOTIFICATION_REPORT_COOLDOWN_MINUTES") or "0")
 
     # 逗號分隔網域白名單。僅這些網域在憑證錯誤時可 fallback verify=False
     INSECURE_SSL_DOMAINS = os.environ.get("INSECURE_SSL_DOMAINS") or ""

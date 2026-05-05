@@ -10,7 +10,14 @@ def _smtp_enabled(app) -> bool:
     return bool(host and from_addr)
 
 
-def send_change_email(app, subscription, diff_summary: str) -> tuple[bool, str | None]:
+def send_change_email(
+    app,
+    subscription,
+    diff_summary: str,
+    *,
+    pdf_bytes: bytes | None = None,
+    pdf_filename: str = "latest_notifications_report.pdf",
+) -> tuple[bool, str | None]:
     """
     若有設定 SMTP_*，當訂閱內容變更時寄 email 給使用者。
     subscription 需有：subscription.user.email, subscription.url, subscription.name
@@ -51,6 +58,8 @@ def send_change_email(app, subscription, diff_summary: str) -> tuple[bool, str |
     msg["To"] = to_addr
     msg["Subject"] = subject
     msg.set_content(body)
+    if pdf_bytes:
+        msg.add_attachment(pdf_bytes, maintype="application", subtype="pdf", filename=pdf_filename)
 
     try:
         with smtplib.SMTP(host, port, timeout=15) as smtp:
@@ -60,7 +69,48 @@ def send_change_email(app, subscription, diff_summary: str) -> tuple[bool, str |
                 smtp.login(username, password)
             smtp.send_message(msg)
         return True, None
-    except Exception:
+    except Exception as e:
         # 通知失敗不影響主要流程，但把原因回傳給呼叫端顯示
-        return False, "寄信失敗，請檢查 SMTP 設定（主機/帳密/TLS/寄件者）"
+        return False, f"寄信失敗：{str(e)}"
+
+
+def send_notifications_report_email(
+    app,
+    *,
+    to_addr: str,
+    pdf_bytes: bytes,
+    filename: str = "latest_notifications_report.pdf",
+) -> tuple[bool, str | None]:
+    """Send latest notifications report PDF to user email."""
+    if not _smtp_enabled(app):
+        return False, "SMTP 未啟用（請設定 SMTP_HOST 與 SMTP_FROM）"
+
+    to_addr = (to_addr or "").strip()
+    if not to_addr:
+        return False, "使用者信箱為空"
+
+    host = app.config.get("SMTP_HOST")
+    port = int(app.config.get("SMTP_PORT") or 587)
+    username = app.config.get("SMTP_USERNAME") or ""
+    password = app.config.get("SMTP_PASSWORD") or ""
+    from_addr = app.config.get("SMTP_FROM")
+    use_tls = bool(app.config.get("SMTP_USE_TLS"))
+
+    msg = EmailMessage()
+    msg["From"] = from_addr
+    msg["To"] = to_addr
+    msg["Subject"] = "[通知報告] 最新通知 PDF"
+    msg.set_content("您好，附件為系統最新通知的 PDF 表格報告。")
+    msg.add_attachment(pdf_bytes, maintype="application", subtype="pdf", filename=filename)
+
+    try:
+        with smtplib.SMTP(host, port, timeout=15) as smtp:
+            if use_tls:
+                smtp.starttls()
+            if username and password:
+                smtp.login(username, password)
+            smtp.send_message(msg)
+        return True, None
+    except Exception as e:
+        return False, f"寄送通知報告失敗：{str(e)}"
 

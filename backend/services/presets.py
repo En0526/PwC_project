@@ -201,5 +201,13 @@ def get_presets() -> list[Preset]:
             check_interval_minutes=30,
             watch_description="追蹤全球最低稅負制最新進展，包含 Pillar Two、XML 數據交換格式及相關申報指南。",
         ),
+        Preset(
+            id="mentor-bingo-bingo",
+            name="Bingo Bingo 賓果賓果開獎號碼",
+            url="https://lotto.auzo.tw/bingobingo.php",
+            frequency="業師提供",
+            check_interval_minutes=5,
+            watch_description="追蹤最新開獎列表（期數、開獎時間與 20 顆號碼），有新期數時通知差異。",
+        ),
     ]
 

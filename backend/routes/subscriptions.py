@@ -1,13 +1,15 @@
 """訂閱的 CRUD 與手動檢查、取得差異。"""
-import re
 from datetime import timezone, timedelta
-from flask import Blueprint, request, jsonify, current_app
+from flask import Blueprint, request, jsonify, current_app, send_file
 from flask_login import login_required, current_user
+from io import BytesIO
 
 from backend.models import db, Subscription, Snapshot, Notification
 from backend.services.diff_service import diff_to_summary
 from backend.services.stdtime_notify import is_stdtime_webclock_url, stdtime_diff_summary
-from backend.services.change_agent import generate_change_report, digest_news_list_snapshot
+from backend.services.change_agent import generate_change_report
+from backend.services.notification_report import build_notifications_pdf
+from backend.services.email_service import send_notifications_report_email
 from backend.scheduler import run_check_subscription
 
 CHECK_INTERVAL_OPTIONS = {
@@ -72,29 +74,6 @@ def parse_source_label(content_full):
     return None
 
 
-def _looks_like_legacy_char_diff(summary: str) -> bool:
-    """字元級 diff_to_summary 產物：與「站點更新｜區塊」列表摘要不符。"""
-    if not summary:
-        return False
-    first = summary.split("\n", 1)[0].strip()
-    if first and "更新｜" in first[:200]:
-        return False
-    if "【新增／變更】" in summary or "【移除】" in summary:
-        return True
-    return bool(re.search(r"(?:^|\s)\d+(?:\.\d+){10,}(?:\s|$)", summary, re.MULTILINE))
-
-
-def _digest_from_latest_subscription_snapshot(subscription: Subscription) -> str | None:
-    row = (
-        Snapshot.query.filter_by(subscription_id=subscription.id)
-        .order_by(Snapshot.captured_at.desc())
-        .first()
-    )
-    if not row or not (row.content_text or "").strip():
-        return None
-    return digest_news_list_snapshot(row.content_text or "", subscription.name or subscription.url)
-
-
 def serialize_notification(n, diff_cache=None):
     message = n.message or ""
     diff_summary = None
@@ -109,23 +88,6 @@ def serialize_notification(n, diff_cache=None):
         if parsed.endswith("..."):
             parsed = parsed[:-3].rstrip()
         diff_summary = parsed or None
-    subscription = Subscription.query.get(n.subscription_id) if n.subscription_id else None
-    if diff_summary and _should_refresh_notification_summary(diff_summary, subscription):
-        try:
-            refreshed = _latest_diff_summary_for_subscription(subscription)
-            if refreshed:
-                diff_summary = refreshed
-        except Exception:
-            # 摘要重算失敗時保留原內容，避免整個通知列表 API 報錯
-            pass
-
-    if subscription and diff_summary and _looks_like_legacy_char_diff(diff_summary):
-        try:
-            digest = _digest_from_latest_subscription_snapshot(subscription)
-            if digest:
-                diff_summary = digest
-        except Exception:
-            pass
 
     return {
         "id": n.id,
@@ -133,64 +95,8 @@ def serialize_notification(n, diff_cache=None):
         "message": display_message,
         "diff_summary": diff_summary,
         "is_read": n.is_read,
-        "created_at": to_taiwan_iso(n.created_at),
+        "created_at": n.created_at.isoformat() if n.created_at else None,
     }
-
-
-def _should_refresh_notification_summary(diff_summary, subscription):
-    if not subscription:
-        return False
-    url = (subscription.url or "").lower()
-    is_rss_url = "rss" in url or "feed" in url or "atom" in url
-    if is_rss_url and (
-        "[新聞列表]" in diff_summary
-        or "[站點]" in diff_summary
-        or "【新增／變更】" in diff_summary
-        or re.search(r"\d+(?:\.\d+){3,}", diff_summary)
-    ):
-        return True
-    if "mof.gov.tw" not in url:
-        return False
-    return (
-        "近一日新增" in diff_summary
-        or "移除內容" in diff_summary
-        or "本次移除" in diff_summary
-    )
-
-
-def _latest_diff_summary_for_subscription(subscription):
-    try:
-        snapshots = (
-            Snapshot.query
-            .filter_by(subscription_id=subscription.id)
-            .order_by(Snapshot.captured_at.desc())
-            .limit(10)
-            .all()
-        )
-        if len(snapshots) < 2:
-            return None
-        newer = older = None
-        for idx in range(len(snapshots) - 1):
-            if snapshots[idx].content_hash != snapshots[idx + 1].content_hash:
-                newer = snapshots[idx]
-                older = snapshots[idx + 1]
-                break
-        if not newer or not older:
-            return None
-        old_t, new_t = older.content_text or "", newer.content_text or ""
-        fallback = diff_to_summary(old_t, new_t)
-        return generate_change_report(
-            url=subscription.url,
-            site_name=subscription.name or subscription.url,
-            previous_snapshot=old_t,
-            current_snapshot=new_t,
-            watch_description=subscription.watch_description,
-            fallback_summary=fallback,
-            api_key=current_app.config.get("GEMINI_API_KEY") or None,
-            model_name=current_app.config.get("AI_SUMMARY_MODEL") or None,
-        )
-    except Exception:
-        return None
 
 
 @subscriptions_bp.route("", methods=["GET"])
@@ -553,21 +459,73 @@ def delete_all_notifications():
     return jsonify({"ok": True, "deleted_count": deleted_count}), 200
 
 
-# ============ RSS 功能與網址辨識 ============
-
-
-@subscriptions_bp.route("/url/classify", methods=["POST"])
+@subscriptions_bp.route("/notifications/report.pdf", methods=["GET"])
 @login_required
-def classify_subscription_url_endpoint():
-    """依實際 GET 結果判定 RSS 或一般網頁，供「新增追蹤」輸入框即時提示。"""
-    from backend.services.scraper import classify_subscription_url
+def download_notifications_report_pdf():
+    """下載最新通知表格 PDF。"""
+    try:
+        max_rows = int(request.args.get("limit", 20))
+    except (TypeError, ValueError):
+        max_rows = 20
+    max_rows = max(1, min(max_rows, 100))
 
-    data = request.get_json() or {}
-    url = (data.get("url") or "").strip()
-    if not url:
-        return jsonify({"error": "請提供網址"}), 400
-    result = classify_subscription_url(url)
-    return jsonify({"url": url, **result}), 200
+    notifications = (
+        Notification.query
+        .filter_by(user_id=current_user.id)
+        .order_by(Notification.created_at.desc())
+        .limit(max_rows)
+        .all()
+    )
+    pdf_bytes = build_notifications_pdf(
+        notifications,
+        user_email=current_user.email,
+        max_rows=max_rows,
+    )
+    return send_file(
+        BytesIO(pdf_bytes),
+        mimetype="application/pdf",
+        as_attachment=True,
+        download_name="latest_notifications_report.pdf",
+    )
+
+
+@subscriptions_bp.route("/notifications/report/send", methods=["POST"])
+@login_required
+def send_notifications_report():
+    """產生最新通知 PDF 並寄送至目前使用者信箱。"""
+    data = request.get_json(silent=True) or {}
+    try:
+        max_rows = int(data.get("limit", 20))
+    except (TypeError, ValueError):
+        max_rows = 20
+    max_rows = max(1, min(max_rows, 100))
+
+    notifications = (
+        Notification.query
+        .filter_by(user_id=current_user.id)
+        .order_by(Notification.created_at.desc())
+        .limit(max_rows)
+        .all()
+    )
+    pdf_bytes = build_notifications_pdf(
+        notifications,
+        user_email=current_user.email,
+        max_rows=max_rows,
+    )
+    ok, err = send_notifications_report_email(
+        current_app,
+        to_addr=current_user.email,
+        pdf_bytes=pdf_bytes,
+    )
+    return jsonify({
+        "ok": ok,
+        "error": err,
+        "sent_to": current_user.email,
+        "rows": len(notifications),
+    }), (200 if ok else 400)
+
+
+# ============ RSS 功能相關端點 ============
 
 
 @subscriptions_bp.route("/rss/detect", methods=["POST"])

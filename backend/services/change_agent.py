@@ -15,6 +15,8 @@ from backend.services.chinatimes_monitor_agent import is_chinatimes_home_url
 from backend.services.chinatimes_diff_agent import generate_chinatimes_diff_report
 from backend.services.mops_monitor_agent import is_mops_realtime_url
 from backend.services.mops_diff_agent import generate_mops_diff_report
+from backend.services.bingo_monitor_agent import is_bingo_bingo_url
+from backend.services.bingo_diff_agent import generate_bingo_diff_report
 
 try:
     import google.generativeai as genai
@@ -43,6 +45,14 @@ def generate_change_report(
         )
         if mops_report:
             return mops_report
+
+    if is_bingo_bingo_url(url):
+        bingo_report = generate_bingo_diff_report(
+            previous_snapshot=previous_snapshot,
+            current_snapshot=current_snapshot,
+        )
+        if bingo_report:
+            return bingo_report
 
     if is_ntbna_news_url(url):
         ntbna_report = generate_ntbna_diff_report(
@@ -76,7 +86,6 @@ def generate_change_report(
 
     list_report = _section_list_report(
         site_name=site_name,
-        source_url=url,
         previous_snapshot=previous_snapshot,
         current_snapshot=current_snapshot,
         watch_description=watch_description,
@@ -86,27 +95,25 @@ def generate_change_report(
     if list_report:
         return list_report
 
-    return fallback_summary or diff_to_summary(previous_snapshot, current_snapshot)
-
-
-def _source_url_is_structured_rss_feed(url: str) -> bool:
-    """與 parse_rss_snapshot 產出之 [新聞列表] 對應的訂閱 URL；固定走 basic 摘要避免 LLM 改寫用語。"""
-    u = (url or "").lower()
-    return any(
-        pat in u
-        for pat in (
-            "/rss/",
-            "newsrssdetail",
-            "rssview",
-            "pro=rss.",
+    if api_key and genai:
+        ai_report = _ai_generic_change_report(
+            url=url,
+            site_name=site_name,
+            previous_snapshot=previous_snapshot,
+            current_snapshot=current_snapshot,
+            watch_description=watch_description,
+            api_key=api_key,
+            model_name=model_name,
         )
-    )
+        if ai_report:
+            return ai_report
+
+    return fallback_summary or diff_to_summary(previous_snapshot, current_snapshot)
 
 
 def _section_list_report(
     *,
     site_name: str,
-    source_url: str = "",
     previous_snapshot: str,
     current_snapshot: str,
     watch_description: str | None = None,
@@ -123,24 +130,18 @@ def _section_list_report(
     added = [item for item in curr_items if _item_key(item) not in prev_keys]
     removed = [item for item in prev_items if _item_key(item) not in curr_keys]
 
-    structured = _has_structured_news_list(current_snapshot)
-    # RSS／列表快照常因 [站點]、[區塊]、[筆數] 或排序微調而 hash 變更，但項目 URL 集合相同；
-    # 若此時 return None 會落到 diff_to_summary，對結構化文字做字元 diff 產生垃圾摘要。
-    if not added and not removed and previous_snapshot and not structured:
+    if not added and not removed and previous_snapshot:
         return None
 
     section_name = _extract_field(current_snapshot, "區塊") or "監測區塊"
     snapshot_site = _extract_field(current_snapshot, "站點") or site_name or "網站"
-    total_records = _extract_field(current_snapshot, "總筆數") or _extract_field(current_snapshot, "筆數")
+    total_records = _extract_field(current_snapshot, "總筆數")
     focus_keywords = _extract_focus_keywords(watch_description)
     focused_added = _filter_items_by_keywords(added, focus_keywords)
     focused_removed = _filter_items_by_keywords(removed, focus_keywords)
+    focus_hint = _build_focus_hint(focus_keywords, focused_added, focused_removed)
 
-    # 僅表頭／格式變更時不呼叫 LLM，避免「無新增」卻產生不穩定摘要
-    force_basic_only = structured and previous_snapshot and not added and not removed
-    skip_ai_rss = structured and _source_url_is_structured_rss_feed(source_url)
-
-    if api_key and genai and not force_basic_only and not skip_ai_rss:
+    if api_key and genai:
         ai_report = _ai_section_list_report(
             site_name=snapshot_site,
             section_name=section_name,
@@ -165,29 +166,83 @@ def _section_list_report(
         added=added,
         removed=removed,
         current_items=curr_items,
+        focus_hint=focus_hint,
         focused_added=focused_added,
         focused_removed=focused_removed,
         has_previous=bool(previous_snapshot),
-        structured_list=structured,
-        source_url=source_url,
     )
 
 
-def _normalize_snapshot_text(snapshot: str | None) -> str:
-    if not snapshot:
+def _ai_generic_change_report(
+    *,
+    url: str,
+    site_name: str,
+    previous_snapshot: str,
+    current_snapshot: str,
+    watch_description: str | None,
+    api_key: str,
+    model_name: str | None = None,
+) -> str | None:
+    """Use Gemini to create a human-readable generic page change summary."""
+    model_name = model_name or os.environ.get("AI_SUMMARY_MODEL") or "gemini-1.5-flash"
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel(model_name)
+
+    before_text = _trim_for_ai(previous_snapshot, max_chars=3500)
+    after_text = _trim_for_ai(current_snapshot, max_chars=3500)
+
+    prompt = f"""你是網站差異說明助理，請用繁體中文幫一般使用者解釋網頁更新重點。
+請只根據提供內容，不要臆測，避免空泛描述。
+
+【站點】{site_name or "未命名網站"}
+【URL】{url}
+【使用者關注重點】{watch_description or "未指定"}
+
+【更新前內容片段】
+{before_text or "（無）"}
+
+【更新後內容片段】
+{after_text or "（無）"}
+
+請輸出格式（純文字）：
+1. 第一行：{site_name or "網站"}更新重點
+2. 第二行：一句總結（例如：新增了哪些公告/異動了哪些條件）
+3. 「主要變更」：列 2-5 點，聚焦使用者可能在意的具體改動
+4. 「對使用者的影響」：1-2 句，說明可能要留意什麼
+
+限制：
+- 最多 350 字
+- 不要貼整段原文
+- 若變化僅為格式、時間戳或重複資訊，請明確說「主要為版面/時間更新，實質內容變化有限」
+"""
+    try:
+        response = model.generate_content(
+            prompt,
+            generation_config={"temperature": 0.1, "max_output_tokens": 500},
+        )
+        text = (getattr(response, "text", "") or "").strip()
+        return text[:1200] if text else None
+    except Exception:
+        return None
+
+
+def _trim_for_ai(text: str | None, *, max_chars: int) -> str:
+    if not text:
         return ""
-    return (snapshot.replace("\r\n", "\n").replace("\r", "\n")).strip()
+    compact = re.sub(r"\n{3,}", "\n\n", text.strip())
+    if len(compact) <= max_chars:
+        return compact
+    head = compact[: int(max_chars * 0.7)]
+    tail = compact[-int(max_chars * 0.3):]
+    return f"{head}\n\n...(中略)...\n\n{tail}"
 
 
 def _extract_list_items(snapshot: str | None) -> list[dict[str, str]]:
     if not snapshot:
         return []
 
-    snapshot = _normalize_snapshot_text(snapshot)
-    items: list[dict[str, str]] = []
+    items = []
     in_list = False
-    # 選擇性子欄標籤：經濟部產業發展署 t=1 稿件分類〔新聞發布／產業大小事〕
-    _lane_rx = r"(?:\[(新聞發布|產業大小事)\]\s+)?"
     for line in snapshot.splitlines():
         stripped = line.strip()
         if stripped == "[新聞列表]":
@@ -195,19 +250,12 @@ def _extract_list_items(snapshot: str | None) -> list[dict[str, str]]:
             continue
         if in_list and stripped.startswith("[") and not re.match(r"^\[\d{4}-\d{2}-\d{2}\]", stripped):
             break
-        match = re.match(
-            rf"^\[(\d{{4}}-\d{{2}}-\d{{2}})\]\s*{_lane_rx}(.+?)(?:\s+\|\s+(.+))?$",
-            stripped,
-        )
+        match = re.match(r"^\[(\d{4}-\d{2}-\d{2})\]\s+(.+?)(?:\s+\|\s+(.+))?$", stripped)
         if match:
-            lane_part = match.group(2)
-            tit = match.group(3).strip()
-            url_part = (match.group(4) or "").strip()
             items.append({
                 "date": match.group(1),
-                "lane": lane_part or "",
-                "title": _clean_item_title(tit),
-                "url": url_part,
+                "title": match.group(2).strip(),
+                "url": (match.group(3) or "").strip(),
             })
             continue
 
@@ -215,23 +263,16 @@ def _extract_list_items(snapshot: str | None) -> list[dict[str, str]]:
         if rss_match:
             items.append({
                 "date": _normalize_item_date(rss_match.group(3).strip()),
-                "title": _clean_item_title(rss_match.group(2).strip()),
+                "title": rss_match.group(2).strip(),
                 "url": rss_match.group(4).strip(),
                 "id": rss_match.group(1).strip(),
-                "lane": "",
             })
     return items
-
-
-def _has_structured_news_list(snapshot: str | None) -> bool:
-    """與 parse_rss_snapshot / 列表監測共用之結構化區塊標記。"""
-    return bool(snapshot and "[新聞列表]" in _normalize_snapshot_text(snapshot))
 
 
 def _extract_field(snapshot: str | None, key: str) -> str:
     if not snapshot:
         return ""
-    snapshot = _normalize_snapshot_text(snapshot)
     for line in snapshot.splitlines():
         stripped = line.strip()
         if stripped.startswith(f"[{key}]"):
@@ -239,83 +280,8 @@ def _extract_field(snapshot: str | None, key: str) -> str:
     return ""
 
 
-def _clean_item_title(title: str) -> str:
-    title = re.sub(r"（\s*\d+(?:\.\d+)+(?:\s+\d{1,2}:\d{2})?\s*）", "", title)
-    title = re.sub(r"\(\s*\d+(?:\.\d+)+(?:\s+\d{1,2}:\d{2})?\s*\)", "", title)
-    title = title.replace("▍", "").strip()
-    return title
-
-
 def _item_key(item: dict[str, str]) -> str:
     return item.get("url") or item.get("id") or f"{item.get('date', '')}|{item.get('title', '')}"
-
-
-def _is_ida_t1_rssview_url(url: str) -> bool:
-    """產發署最新消息聯播（t=1），稿件可能分列「新聞發布」「產業大小事」。"""
-    low = (url or "").lower()
-    if "ida.gov.tw" not in low or "rssview" not in low:
-        return False
-    m = re.search(r"[\?&]t=(\d+)", url or "", flags=re.I)
-    return bool(m) and int(m.group(1)) == 1
-
-
-def _items_carry_sidebar_lane(items: list[dict[str, str]]) -> bool:
-    return any((it.get("lane") or "").strip() for it in items)
-
-
-def _compose_basic_news_block(
-    *,
-    site_name: str,
-    section_display: str,
-    current_items: list[dict[str, str]],
-    added: list[dict[str, str]],
-    focused_added: list[dict[str, str]],
-    has_previous: bool,
-    structured_list: bool,
-) -> str:
-    latest_date = _latest_item_date(current_items)
-    recent_three_day_items = _items_since(current_items, latest_date, days=3)
-    latest_day_items = _items_on_date(current_items, latest_date)
-    latest_day_added = _items_on_date(added, latest_date)
-
-    dash = "-" * 32
-    lines = [f"{site_name}更新｜{section_display}"]
-    if latest_date:
-        lines.append(f"近三日共更新：{len(recent_three_day_items)} 則新聞")
-        lines.append(f"今日新增：{len(latest_day_items)}則")
-
-    if latest_day_items:
-        lines.append("最近新增：")
-        for i, item in enumerate(latest_day_items[:5], 1):
-            lines.append(f"  {i}.  [{item['date']}] {item['title']}")
-        if len(latest_day_items) > 5:
-            lines.append(f"  另有 {len(latest_day_items) - 5} 則最近新增新聞。")
-    elif added:
-        lines.append("最近新增：")
-        for i, item in enumerate(added[:5], 1):
-            lines.append(f"  {i}.  [{item['date']}] {item['title']}")
-        if len(added) > 5:
-            lines.append(f"  另有 {len(added) - 5} 則新增新聞。")
-    elif not has_previous:
-        lines.append("首次建立監測基準，目前最新內容：")
-        for i, item in enumerate(current_items[:10], 1):
-            lines.append(f"  {i}. [{item['date']}] {item['title']}")
-    elif structured_list:
-        lines.append(
-            f"（{section_display}）偵測到列表呈現或表頭資訊有更新，但與上次比對之新聞項目相同（無新增／移除項目）。"
-        )
-    else:
-        lines.append("列表內容有變化，但未偵測到新增項目。")
-
-    if focused_added:
-        lines.append(dash)
-        lines.append("關注重點新增：")
-        for i, item in enumerate(focused_added[:5], 1):
-            lines.append(f"  {i}. [{item['date']}] {item['title']}")
-        if len(focused_added) > 5:
-            lines.append(f"  另有 {len(focused_added) - 5} 則符合關注條件的新增內容。")
-
-    return "\n".join(lines)
 
 
 def _basic_section_list_report(
@@ -326,105 +292,69 @@ def _basic_section_list_report(
     added: list[dict[str, str]],
     removed: list[dict[str, str]],
     current_items: list[dict[str, str]],
+    focus_hint: str,
     focused_added: list[dict[str, str]],
     focused_removed: list[dict[str, str]],
     has_previous: bool,
-    structured_list: bool = False,
-    source_url: str = "",
 ) -> str:
-    if (
-        structured_list
-        and _is_ida_t1_rssview_url(source_url)
-        and _items_carry_sidebar_lane(current_items)
-    ):
-        blocks: list[str] = []
-        for lane_key in ("新聞發布", "產業大小事"):
-            lane_cur = [it for it in current_items if it.get("lane") == lane_key]
-            if not lane_cur:
-                continue
-            lane_added = [it for it in added if it.get("lane") == lane_key]
-            lane_focus = [it for it in focused_added if it.get("lane") == lane_key]
-            blocks.append(
-                _compose_basic_news_block(
-                    site_name=site_name,
-                    section_display=lane_key,
-                    current_items=lane_cur,
-                    added=lane_added,
-                    focused_added=lane_focus,
-                    has_previous=has_previous,
-                    structured_list=structured_list,
-                )
-            )
-        if blocks:
-            return "\n\n".join(blocks)
+    latest_date = _latest_item_date(current_items)
+    recent_three_day_items = _items_since(current_items, latest_date, days=3)
+    latest_day_added = _items_on_date(added, latest_date)
+    older_added = [item for item in added if item not in latest_day_added]
 
-    return _compose_basic_news_block(
-        site_name=site_name,
-        section_display=section_name,
-        current_items=current_items,
-        added=added,
-        focused_added=focused_added,
-        has_previous=has_previous,
-        structured_list=structured_list,
-    )
-
-
-def digest_news_list_snapshot(snapshot_text: str, site_name_fallback: str) -> str | None:
-    """
-    從「單一筆」結構化快照產生前幾則列表摘要（不做新舊比對）。
-    供舊通知仍存字字 diff 垃圾時，改用最新快照顯示可讀內容。
-    """
-    snap = _normalize_snapshot_text(snapshot_text)
-    items = _extract_list_items(snap)
-    if not items:
-        return None
-
-    site = _extract_field(snap, "站點") or site_name_fallback or "網站"
-    section = _extract_field(snap, "區塊") or "監測區塊"
-
-    lanes_present = {(it.get("lane") or "").strip() for it in items if (it.get("lane") or "").strip()}
-    if lanes_present and lanes_present <= {"新聞發布", "產業大小事"}:
-        parts: list[str] = []
-        for lk in ("新聞發布", "產業大小事"):
-            sub = [it for it in items if it.get("lane") == lk]
-            if not sub:
-                continue
-            latest_date = _latest_item_date(sub)
-            recent_three = _items_since(sub, latest_date, days=3)
-            latest_day = _items_on_date(sub, latest_date)
-            buf = [f"{site}更新｜{lk}"]
-            if latest_date:
-                buf.append(f"近三日共更新：{len(recent_three)} 則新聞")
-                buf.append(f"今日新增：{len(latest_day)}則")
-            preview = latest_day if latest_day else sorted(
-                sub,
-                key=lambda it: (_parse_date(it.get("date", "")) or date.min),
-                reverse=True,
-            )
-            buf.append("快照列表概要（最近一次擷取，供檢視舊通知之用）：")
-            for i, it in enumerate(preview[:10], 1):
-                buf.append(f"  {i}.  [{it.get('date', '')}] {it.get('title', '')}")
-            parts.append("\n".join(buf))
-        if parts:
-            return "\n\n".join(parts)
-
-    latest_date = _latest_item_date(items)
-    recent_three = _items_since(items, latest_date, days=3)
-    latest_day = _items_on_date(items, latest_date)
-
-    lines = [f"{site}更新｜{section}"]
+    dash = "-" * 32
+    lines = [f"{site_name}更新｜{section_name}"]
     if latest_date:
-        lines.append(f"近三日共更新：{len(recent_three)} 則新聞")
-        lines.append(f"今日新增：{len(latest_day)}則")
+        lines.append(f"近三日共更新：{len(recent_three_day_items)} 則新聞")
+        lines.append(f"近一日新增：{len(latest_day_added)} 則")
+    if focus_hint:
+        lines.append(focus_hint)
+    lines.append(dash)
 
-    preview = latest_day if latest_day else sorted(
-        items,
-        key=lambda it: (_parse_date(it.get("date", "")) or date.min),
-        reverse=True,
-    )
-    lines.append("快照列表概要（最近一次擷取，供檢視舊通知之用）：")
-    for i, item in enumerate(preview[:10], 1):
-        lines.append(f"  {i}.  [{item.get('date', '')}] {item.get('title', '')}")
+    if latest_day_added:
+        lines.append("近一日新增重點：")
+        for i, item in enumerate(latest_day_added[:5], 1):
+            lines.append(f"  {i}. [{item['date']}] {item['title']}")
+        if len(latest_day_added) > 5:
+            lines.append(f"  另有 {len(latest_day_added) - 5} 則近一日新增新聞。")
+    elif added:
+        lines.append("新增內容：")
+        for i, item in enumerate(added[:5], 1):
+            lines.append(f"  {i}. [{item['date']}] {item['title']}")
+        if len(added) > 5:
+            lines.append(f"  另有 {len(added) - 5} 則新增新聞。")
+    elif not has_previous:
+        lines.append("首次建立監測基準，目前最新內容：")
+        for i, item in enumerate(current_items[:10], 1):
+            lines.append(f"  {i}. [{item['date']}] {item['title']}")
+    else:
+        lines.append("列表內容有變化，但未偵測到新增項目。")
+
+    if older_added:
+        lines.append(dash)
+        lines.append(f"其他新增：{len(older_added)} 則")
+        for item in older_added[:5]:
+            lines.append(f"  - [{item['date']}] {item['title']}")
+
+    if focused_added:
+        lines.append(dash)
+        lines.append("關注重點新增：")
+        for i, item in enumerate(focused_added[:5], 1):
+            lines.append(f"  {i}. [{item['date']}] {item['title']}")
+        if len(focused_added) > 5:
+            lines.append(f"  另有 {len(focused_added) - 5} 則符合關注條件的新增內容。")
+
+    if removed:
+        lines.append(dash)
+        lines.append("移除內容：")
+        for item in removed:
+            lines.append(f"  - [{item['date']}] {item['title']}")
+
+    if focused_removed:
+        lines.append(dash)
+        lines.append("關注重點移除：")
+        for item in focused_removed[:5]:
+            lines.append(f"  - [{item['date']}] {item['title']}")
 
     return "\n".join(lines)
 
@@ -444,21 +374,20 @@ def _ai_section_list_report(
     api_key: str,
     model_name: str | None = None,
 ) -> str | None:
-    try:
-        model_name = model_name or os.environ.get("AI_SUMMARY_MODEL") or "gemini-1.5-flash"
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(model_name)
+    model_name = model_name or os.environ.get("AI_SUMMARY_MODEL") or "gemini-1.5-flash"
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel(model_name)
 
-        added_block = "\n".join(_format_item(item) for item in added) or "（無新增）"
-        latest_date = _latest_item_date(current_items)
-        recent_three_count = len(_items_since(current_items, latest_date, days=3))
-        latest_day_count = len(_items_on_date(current_items, latest_date))
-        latest_day_items = _items_on_date(current_items, latest_date)
-        latest_day_added = _items_on_date(added, latest_date)
-        latest_day_items_block = "\n".join(_format_item(item) for item in latest_day_items) or "（無最近新增）"
-        focused_added_block = "\n".join(_format_item(item) for item in focused_added) or "（無符合關注條件的新增）"
+    added_block = "\n".join(_format_item(item) for item in added) or "（無新增）"
+    removed_block = "\n".join(_format_item(item) for item in removed) or "（無移除）"
+    latest_date = _latest_item_date(current_items)
+    recent_three_count = len(_items_since(current_items, latest_date, days=3))
+    latest_day_added = _items_on_date(added, latest_date)
+    latest_day_added_block = "\n".join(_format_item(item) for item in latest_day_added) or "（無近一日新增）"
+    focused_added_block = "\n".join(_format_item(item) for item in focused_added) or "（無符合關注條件的新增）"
+    focused_removed_block = "\n".join(_format_item(item) for item in focused_removed) or "（無符合關注條件的移除）"
 
-        prompt = f"""你是網站更新通知摘要 Agent。
+    prompt = f"""你是網站更新通知摘要 Agent。
 請根據以下結構化列表差異，輸出繁體中文通知。只根據提供內容，不要臆測。
 
 【站點】{site_name}
@@ -468,25 +397,32 @@ def _ai_section_list_report(
 【目前總筆數】{total_records or "未知"}
 【最新日期】{latest_date.isoformat() if latest_date else "未知"}
 【近三日新聞數】{recent_three_count}
-【今日新增總數】{latest_day_count}
+【近一日新增數】{len(latest_day_added)}
 
 【新增項目】
 {added_block}
 
-【最近新增項目（請優先 highlight）】
-{latest_day_items_block}
+【近一日新增項目（請優先 highlight）】
+{latest_day_added_block}
 
 【符合使用者關注重點的新增項目】
 {focused_added_block}
 
+【移除項目】
+{removed_block}
+
+【符合使用者關注重點的移除項目】
+{focused_removed_block}
+
 請輸出：
 1. 第一行：{site_name}更新｜{section_name}
-2. 第二、三行必須逐字為「近三日共更新：N 則新聞」與「今日新增：N則」（嚴禁改寫成「近一日」等別稱），不要輸出目前總筆數。
+2. 第二、三行只寫「近三日共更新：N 則新聞」與「近一日新增：N 則」，不要輸出目前總筆數。
 3. 若有符合使用者關注重點的新增項目，優先以「關注重點新增」列出，聚焦法規、公告、澄清、公告送達或 watch_description 指向的資訊，不要被其他一般新聞分散。
-4. 接著以「最近新增」列出最新日期當天最多 5 則新聞，保留日期與標題。
-5. 不要輸出任何移除項目、移除數量、關注條件或內部判斷文字。
+4. 接著以「近一日新增重點」列出最多 5 則近一日新增，保留日期與標題。
+5. 若有其他日期新增或移除，再簡短列出數量與最多 3 則。
 5. 最多 800 字，純文字，不使用 Markdown 標題。
 """
+    try:
         response = model.generate_content(
             prompt,
             generation_config={"temperature": 0.1, "max_output_tokens": 700},
@@ -616,3 +552,13 @@ def _filter_items_by_keywords(items: list[dict[str, str]], keywords: list[str]) 
     return matched
 
 
+def _build_focus_hint(
+    keywords: list[str],
+    focused_added: list[dict[str, str]],
+    focused_removed: list[dict[str, str]],
+) -> str:
+    if not keywords:
+        return ""
+    if focused_added or focused_removed:
+        return f"關注條件命中：{', '.join(keywords[:5])}"
+    return f"關注條件：{', '.join(keywords[:5])}（本次未命中新增或移除項目）"

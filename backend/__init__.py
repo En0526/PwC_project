@@ -35,6 +35,8 @@ def create_app(config_class=Config):
         static_url_path="/static",
     )
     app.config.from_object(config_class)
+    # SQLite 在排程與手動檢查同時寫入時容易 lock，拉高 timeout 降低失敗率。
+    app.config.setdefault("SQLALCHEMY_ENGINE_OPTIONS", {"connect_args": {"timeout": 30}})
     db.init_app(app)
     login_manager = LoginManager(app)
     login_manager.login_view = "auth.login"

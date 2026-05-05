@@ -8,3 +8,4 @@ python-dotenv>=1.0.0
 google-generativeai>=0.3.0
 diff-match-patch>=20230430
 playwright>=1.44.0
+reportlab>=4.0.0

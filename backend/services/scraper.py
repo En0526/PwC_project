@@ -43,6 +43,11 @@ from backend.services.mops_monitor_agent import (
     fetch_mops_realtime_structured,
     mops_snapshot_text,
 )
+from backend.services.bingo_monitor_agent import (
+    is_bingo_bingo_url,
+    extract_bingo_bingo_structured,
+    bingo_bingo_snapshot_text,
+)
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 TAIWAN_TZ = timezone(timedelta(hours=8))
@@ -1012,6 +1017,19 @@ def scrape_and_extract(
             raise
         except Exception:
             pass  # API 失敗時 fallback 到一般流程
+
+    # Bingo Bingo 開獎頁專屬 Agent 1：抽取開獎表格（期數/時間/20 顆號碼）
+    if is_bingo_bingo_url(url):
+        try:
+            html_raw, _ = fetch_page_detailed(url)
+            structured = extract_bingo_bingo_structured(html_raw, url)
+            snapshot = bingo_bingo_snapshot_text(structured)
+            h = content_hash(snapshot)
+            return snapshot, h, {"status": "ok", "source": "bingo_agent", "confidence": 0.93, "hint": ""}
+        except ScrapeFailure:
+            raise
+        except Exception:
+            pass  # 解析失敗時 fallback 到一般流程
 
     url_expects_rss = _url_expects_rss(url)
     playwright_used = False
