@@ -1142,16 +1142,12 @@ def scrape_and_extract(
                 retryable=False,
             )
 
-    if not watch_description or not watch_description.strip():
-        h = content_hash(full_text)
-        source = "playwright_html" if playwright_used else "html"
-        return full_text, h, {"status": "ok", "source": source, "confidence": 0.8, "hint": ""}
-
+    # 已知站點（OECD 議題頁、財政部列表等）：即使未填「觀看區塊」也要先跑專用截取，避免整頁雜訊導致差異難讀
     section_snapshot = extract_section_snapshot(
         url=url,
         html=html,
         full_text=full_text,
-        watch_description=watch_description.strip(),
+        watch_description=(watch_description or "").strip() or None,
     )
     if section_snapshot:
         h = content_hash(section_snapshot.text)
@@ -1164,6 +1160,11 @@ def scrape_and_extract(
             "section": section_snapshot.section_name,
             "site": section_snapshot.site_name,
         }
+
+    if not watch_description or not watch_description.strip():
+        h = content_hash(full_text)
+        source = "playwright_html" if playwright_used else "html"
+        return full_text, h, {"status": "ok", "source": source, "confidence": 0.8, "hint": ""}
 
     if use_gemini and gemini_api_key:
         try:

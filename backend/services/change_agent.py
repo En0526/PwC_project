@@ -21,6 +21,10 @@ from backend.services.bingo_monitor_agent import is_bingo_bingo_url
 from backend.services.bingo_diff_agent import generate_bingo_diff_report
 from backend.services.oecd_beps_monitor_agent import is_oecd_beps_url
 from backend.services.oecd_beps_diff_agent import generate_oecd_beps_diff_report
+from backend.services.oecd_topics_diff_agent import (
+    generate_oecd_topics_diff_report,
+    is_oecd_topics_page_url,
+)
 
 try:
     import google.generativeai as genai
@@ -67,6 +71,15 @@ def generate_change_report(
         )
         if oecd_report:
             return oecd_report
+
+    if is_oecd_topics_page_url(url):
+        topics_report = generate_oecd_topics_diff_report(
+            url=url,
+            previous_snapshot=previous_snapshot,
+            current_snapshot=current_snapshot,
+        )
+        if topics_report:
+            return topics_report
 
     if is_ntbna_news_url(url):
         ntbna_report = generate_ntbna_diff_report(
