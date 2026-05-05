@@ -210,6 +210,7 @@ def run_check_subscription(sub_id: int, app) -> tuple[bool, str | None, bool, bo
             "http_status": None,
             "source": scrape_meta.get("source") or "unknown",
             "confidence": scrape_meta.get("confidence"),
+            "diff_summary": diff_summary if (changed and meaningful_change) else None,
         }
 
 

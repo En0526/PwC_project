@@ -290,18 +290,18 @@ def check_all_now():
             ok, err, changed_internal, mail_sent, mail_error, diagnostic = run_check_subscription(sub.id, current_app)
             if changed_internal:
                 changed_count += 1
-            message = None
             if ok:
                 if changed_internal:
-                    message = f"手動檢查：您的訂閱 '{sub.name or sub.url}' 已檢查，並發現更新。"
+                    # run_check_subscription 已建立含差異內容的通知，此處不重複建立
+                    # （避免無差異內容的手動通知排在最上面，蓋過真正有內容的通知）
+                    pass
                 else:
-                    message = f"手動檢查：您的訂閱 '{sub.name or sub.url}' 已檢查，暫時無變更。"
-                notification = Notification(
-                    user_id=current_user.id,
-                    subscription_id=sub.id,
-                    message=message,
-                )
-                db.session.add(notification)
+                    notification = Notification(
+                        user_id=current_user.id,
+                        subscription_id=sub.id,
+                        message=f"手動檢查：您的訂閱 '{sub.name or sub.url}' 已檢查，暫時無變更。",
+                    )
+                    db.session.add(notification)
             else:
                 status = (diagnostic or {}).get("status") or "failed"
                 hint = (diagnostic or {}).get("hint") or ""
