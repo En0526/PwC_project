@@ -1,8 +1,11 @@
 """擷取網頁內容，並可依使用者描述用 AI 擷取關注區塊。"""
 import hashlib
 import os
+import random
 import re
 import ssl
+import threading
+import time
 import warnings
 import xml.etree.ElementTree as ET
 from datetime import timedelta, timezone
@@ -62,6 +65,72 @@ DEFAULT_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
 }
+
+PLAYWRIGHT_FALLBACK_CODES = {
+    "http_403",
+    "http_429",
+    "http_5xx",
+    "timeout",
+    "connection_error",
+    "http_error",
+    "request_error",
+}
+
+_HOST_LAST_REQUEST_AT: dict[str, float] = {}
+_HOST_REQUEST_LOCK = threading.Lock()
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float((os.environ.get(name) or "").strip() or default)
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int((os.environ.get(name) or "").strip() or default)
+    except (TypeError, ValueError):
+        return default
+
+
+def _wait_host_pacing(url: str) -> None:
+    """同網域節流：避免短時間連續請求觸發反爬。"""
+    min_interval = max(0.0, _env_float("SCRAPER_HOST_MIN_INTERVAL_SECONDS", 1.5))
+    jitter = max(0.0, _env_float("SCRAPER_HOST_JITTER_SECONDS", 0.7))
+    if min_interval <= 0 and jitter <= 0:
+        return
+
+    host = (urlparse(url or "").hostname or "").lower().strip()
+    if not host:
+        return
+
+    sleep_for = 0.0
+    with _HOST_REQUEST_LOCK:
+        now = time.monotonic()
+        last = _HOST_LAST_REQUEST_AT.get(host, 0.0)
+        gap = (last + min_interval) - now
+        if gap > 0:
+            sleep_for = gap
+            if jitter > 0:
+                sleep_for += random.uniform(0.0, jitter)
+        elif jitter > 0:
+            sleep_for = random.uniform(0.0, jitter * 0.5)
+        _HOST_LAST_REQUEST_AT[host] = now + max(0.0, sleep_for)
+
+    if sleep_for > 0:
+        time.sleep(sleep_for)
+
+
+def _sleep_retry_delay(attempt: int, *, base_seconds: float, jitter_seconds: float) -> None:
+    """退避重試：第 1 次重試等待 base，第 2 次等待 2*base，並加隨機抖動。"""
+    if attempt < 1:
+        return
+    delay = max(0.0, base_seconds) * (2 ** (attempt - 1))
+    if jitter_seconds > 0:
+        delay += random.uniform(0.0, jitter_seconds)
+    if delay > 0:
+        time.sleep(delay)
 
 
 class ScrapeFailure(RuntimeError):
@@ -750,38 +819,54 @@ def fetch_page_playwright(url: str, timeout: int = 20) -> tuple[str, str]:
         )
 
     normalized_url = normalize_url(url)
-    browser = None
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context(user_agent=USER_AGENT, locale="zh-TW")
-            page = context.new_page()
-            page.goto(normalized_url, wait_until="domcontentloaded", timeout=timeout * 1000)
-            page.wait_for_timeout(1200)
-            html = page.content()
-            context.close()
-            return html, "text/html; charset=utf-8"
-    except Exception as e:
-        is_pw_timeout = PlaywrightTimeoutError is not None and isinstance(e, PlaywrightTimeoutError)
-        if is_pw_timeout:
-            raise ScrapeFailure(
-                code="playwright_timeout",
-                message=f"瀏覽器模式逾時: {e}",
-                hint="網站載入過慢，請稍後再試。",
-                retryable=True,
-            ) from e
-        raise ScrapeFailure(
-            code="playwright_error",
-            message=f"瀏覽器模式失敗: {e}",
-            hint="建議確認 Chromium 是否安裝完成，或稍後重試。",
-            retryable=True,
-        ) from e
-    finally:
-        if browser is not None:
-            try:
-                browser.close()
-            except Exception:
-                pass
+    max_attempts = max(1, _env_int("SCRAPER_PLAYWRIGHT_RETRY_ATTEMPTS", 3))
+    retry_base = _env_float("SCRAPER_PLAYWRIGHT_RETRY_BASE_SECONDS", 1.0)
+    retry_jitter = _env_float("SCRAPER_PLAYWRIGHT_RETRY_JITTER_SECONDS", 0.8)
+    nav_jitter = max(0.0, _env_float("SCRAPER_PLAYWRIGHT_NAV_JITTER_SECONDS", 0.6))
+
+    for attempt in range(1, max_attempts + 1):
+        browser = None
+        try:
+            _wait_host_pacing(normalized_url)
+            if nav_jitter > 0:
+                time.sleep(random.uniform(0.0, nav_jitter))
+
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                context = browser.new_context(user_agent=USER_AGENT, locale="zh-TW")
+                page = context.new_page()
+                page.goto(normalized_url, wait_until="domcontentloaded", timeout=timeout * 1000)
+                page.wait_for_timeout(1200)
+                html = page.content()
+                context.close()
+                return html, "text/html; charset=utf-8"
+        except Exception as e:
+            is_pw_timeout = PlaywrightTimeoutError is not None and isinstance(e, PlaywrightTimeoutError)
+            if is_pw_timeout:
+                err = ScrapeFailure(
+                    code="playwright_timeout",
+                    message=f"瀏覽器模式逾時: {e}",
+                    hint="網站載入過慢，請稍後再試。",
+                    retryable=True,
+                )
+            else:
+                err = ScrapeFailure(
+                    code="playwright_error",
+                    message=f"瀏覽器模式失敗: {e}",
+                    hint="建議確認 Chromium 是否安裝完成，或稍後重試。",
+                    retryable=True,
+                )
+
+            if attempt < max_attempts and err.retryable:
+                _sleep_retry_delay(attempt, base_seconds=retry_base, jitter_seconds=retry_jitter)
+                continue
+            raise err from e
+        finally:
+            if browser is not None:
+                try:
+                    browser.close()
+                except Exception:
+                    pass
 
 
 def _get_insecure_ssl_domains() -> set[str]:
@@ -812,7 +897,13 @@ def _is_insecure_ssl_allowed(url: str) -> bool:
 def fetch_page(url: str, timeout: int = 20) -> tuple[str | None, str | None]:
     """取得網頁 HTML，回傳 (html_text, error_message)。"""
     try:
-        html_text, _ = fetch_page_detailed(url, timeout=timeout)
+        html_text, _, _ = fetch_page_resilient(
+            url,
+            timeout_http=timeout,
+            timeout_playwright=max(timeout + 8, 20),
+            allow_playwright=True,
+            detect_dynamic=True,
+        )
         return html_text, None
     except ScrapeFailure as e:
         return None, str(e)
@@ -821,25 +912,77 @@ def fetch_page(url: str, timeout: int = 20) -> tuple[str | None, str | None]:
 def fetch_page_detailed(url: str, timeout: int = 20) -> tuple[str, str]:
     """取得網頁內容與 content-type，失敗時丟 ScrapeFailure。"""
     normalized_url = normalize_url(url)
+    max_attempts = max(1, _env_int("SCRAPER_REQUEST_RETRY_ATTEMPTS", 3))
+    retry_base = _env_float("SCRAPER_REQUEST_RETRY_BASE_SECONDS", 0.8)
+    retry_jitter = _env_float("SCRAPER_REQUEST_RETRY_JITTER_SECONDS", 0.5)
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            _wait_host_pacing(normalized_url)
+            r = requests.get(normalized_url, headers=DEFAULT_HEADERS, timeout=timeout)
+            r.raise_for_status()
+            r.encoding = r.apparent_encoding or "utf-8"
+            return r.text, (r.headers.get("Content-Type") or "")
+        except requests.RequestException as e:
+            # 只對白名單網域做 SSL 寬鬆模式 fallback，其他網站仍維持嚴格驗證
+            is_ssl_error = isinstance(getattr(e, "reason", None), ssl.SSLError) or "CERTIFICATE_VERIFY_FAILED" in str(e)
+            if is_ssl_error and _is_insecure_ssl_allowed(normalized_url):
+                try:
+                    _wait_host_pacing(normalized_url)
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore")
+                        r = requests.get(normalized_url, headers=DEFAULT_HEADERS, timeout=timeout, verify=False)
+                    r.raise_for_status()
+                    r.encoding = r.apparent_encoding or "utf-8"
+                    return r.text, (r.headers.get("Content-Type") or "")
+                except requests.RequestException as e2:
+                    err = _classify_request_exception(e2, normalized_url, used_insecure_ssl=True)
+            else:
+                err = _classify_request_exception(e, normalized_url, used_insecure_ssl=False)
+
+            if attempt < max_attempts and err.retryable:
+                _sleep_retry_delay(attempt, base_seconds=retry_base, jitter_seconds=retry_jitter)
+                continue
+            raise err
+
+
+def fetch_page_resilient(
+    url: str,
+    *,
+    timeout_http: int = 20,
+    timeout_playwright: int = 30,
+    allow_playwright: bool = True,
+    detect_dynamic: bool = True,
+    force_playwright: bool = False,
+) -> tuple[str, str, dict]:
+    """通用抓取入口：requests + 失敗 fallback + 動態頁 fallback。"""
+    normalized_url = normalize_url(url)
+    meta = {"playwright_used": False, "fallback_reason": ""}
+
+    if force_playwright:
+        html, content_type = fetch_page_playwright(normalized_url, timeout=timeout_playwright)
+        meta["playwright_used"] = True
+        meta["fallback_reason"] = "forced"
+        return html, content_type, meta
+
     try:
-        r = requests.get(normalized_url, headers=DEFAULT_HEADERS, timeout=timeout)
-        r.raise_for_status()
-        r.encoding = r.apparent_encoding or "utf-8"
-        return r.text, (r.headers.get("Content-Type") or "")
-    except requests.RequestException as e:
-        # 只對白名單網域做 SSL 寬鬆模式 fallback，其他網站仍維持嚴格驗證
-        is_ssl_error = isinstance(getattr(e, "reason", None), ssl.SSLError) or "CERTIFICATE_VERIFY_FAILED" in str(e)
-        if is_ssl_error and _is_insecure_ssl_allowed(normalized_url):
-            try:
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore")
-                    r = requests.get(normalized_url, headers=DEFAULT_HEADERS, timeout=timeout, verify=False)
-                r.raise_for_status()
-                r.encoding = r.apparent_encoding or "utf-8"
-                return r.text, (r.headers.get("Content-Type") or "")
-            except requests.RequestException as e2:
-                raise _classify_request_exception(e2, normalized_url, used_insecure_ssl=True) from e2
-        raise _classify_request_exception(e, normalized_url, used_insecure_ssl=False) from e
+        html, content_type = fetch_page_detailed(normalized_url, timeout=timeout_http)
+    except ScrapeFailure as e:
+        if allow_playwright and e.code in PLAYWRIGHT_FALLBACK_CODES:
+            html, content_type = fetch_page_playwright(normalized_url, timeout=timeout_playwright)
+            meta["playwright_used"] = True
+            meta["fallback_reason"] = e.code
+            return html, content_type, meta
+        raise
+
+    if allow_playwright and detect_dynamic:
+        text = html_to_clean_text(html)
+        if _looks_dynamic_unreadable(html, text):
+            html, content_type = fetch_page_playwright(normalized_url, timeout=timeout_playwright)
+            meta["playwright_used"] = True
+            meta["fallback_reason"] = "dynamic_unreadable"
+
+    return html, content_type, meta
 
 
 def normalize_url(url: str) -> str:
@@ -884,7 +1027,13 @@ def classify_subscription_url(url: str, timeout: int = 12) -> dict:
         return {"ok": False, "mode": None, "hint": "請輸入網址。"}
 
     try:
-        body, content_type = fetch_page_detailed(url, timeout=timeout)
+        body, content_type, _ = fetch_page_resilient(
+            url,
+            timeout_http=timeout,
+            timeout_playwright=max(timeout + 8, 20),
+            allow_playwright=True,
+            detect_dynamic=False,
+        )
     except ScrapeFailure as e:
         return {
             "ok": False,
@@ -975,7 +1124,7 @@ def scrape_and_extract(
     # 行政院公報資訊網專屬 Agent 1 處理
     if is_gazette_url(url):
         try:
-            html_raw, _ = fetch_page_detailed(url)
+            html_raw, _, _ = fetch_page_resilient(url, timeout_http=20, timeout_playwright=30)
             structured = extract_gazette_structured(html_raw)
             snapshot = gazette_snapshot_text(structured)
             h = content_hash(snapshot)
@@ -988,7 +1137,7 @@ def scrape_and_extract(
     # 財政部北區國稅局 本局新聞稿 專屬 Agent 1 處理
     if is_ntbna_news_url(url):
         try:
-            html_raw, _ = fetch_page_detailed(url)
+            html_raw, _, _ = fetch_page_resilient(url, timeout_http=20, timeout_playwright=30)
             structured = extract_ntbna_structured(html_raw, url)
             snapshot = ntbna_snapshot_text(structured)
             h = content_hash(snapshot)
@@ -1001,7 +1150,7 @@ def scrape_and_extract(
     # OECD BEPS 主題頁面（Latest insights + Related publications）- JS 動態頁面，需 Playwright
     if is_oecd_beps_url(url):
         try:
-            html_raw, _ = fetch_page_playwright(url, timeout=30)
+            html_raw, _, _ = fetch_page_resilient(url, timeout_http=20, timeout_playwright=30)
             structured = extract_oecd_beps_structured(html_raw, url)
             snapshot = oecd_beps_snapshot_text(structured)
             h = content_hash(snapshot)
@@ -1014,7 +1163,7 @@ def scrape_and_extract(
     # 中時首頁即時新聞專屬 Agent 1 處理
     if is_chinatimes_home_url(url):
         try:
-            html_raw, _ = fetch_page_detailed(url)
+            html_raw, _, _ = fetch_page_resilient(url, timeout_http=20, timeout_playwright=30)
             structured = extract_chinatimes_structured(html_raw, url)
             snapshot = chinatimes_snapshot_text(structured)
             h = content_hash(snapshot)
@@ -1039,7 +1188,7 @@ def scrape_and_extract(
     # Bingo Bingo 開獎頁專屬 Agent 1：抽取開獎表格（期數/時間/20 顆號碼）
     if is_bingo_bingo_url(url):
         try:
-            html_raw, _ = fetch_page_detailed(url)
+            html_raw, _, _ = fetch_page_resilient(url, timeout_http=20, timeout_playwright=30)
             structured = extract_bingo_bingo_structured(html_raw, url)
             snapshot = bingo_bingo_snapshot_text(structured)
             h = content_hash(snapshot)
@@ -1053,25 +1202,27 @@ def scrape_and_extract(
     playwright_used = False
 
     try:
-        html, content_type = fetch_page_detailed(url)
+        html, content_type, fetch_meta = fetch_page_resilient(
+            url,
+            timeout_http=20,
+            timeout_playwright=30,
+            allow_playwright=True,
+            detect_dynamic=not url_expects_rss,
+        )
+        playwright_used = bool(fetch_meta.get("playwright_used"))
     except ScrapeFailure as e:
         # fetch 失敗：判斷是否期望 RSS
         if url_expects_rss:
             # URL 看起來像 RSS，但 fetch 失敗
-            # 如果被 403/429 阻擋，也嘗試 Playwright fallback
-            if e.code in ("http_403", "http_429"):
-                try:
-                    html, content_type = fetch_page_playwright(url)
-                    playwright_used = True
-                except ScrapeFailure as pe:
-                    # Playwright 也失敗，回報 RSS 被阻擋的錯誤
-                    raise ScrapeFailure(
-                        code="rss_fetch_failed_blocked",
-                        message=f"無法取得 RSS feed：{e.message}（已嘗試瀏覽器模式）",
-                        hint="此 RSS 源被網站反爬嚴格阻擋，建議改為監測主頁面 HTML，或更換 feed 來源。",
-                        retryable=False,
-                        http_status=e.http_status,
-                    ) from e
+            # fetch_page_resilient 已經做過 fallback；此處只轉成 RSS 友善錯誤訊息。
+            if e.code in PLAYWRIGHT_FALLBACK_CODES:
+                raise ScrapeFailure(
+                    code="rss_fetch_failed_blocked",
+                    message=f"無法取得 RSS feed：{e.message}（已嘗試 fallback）",
+                    hint="此 RSS 源被網站反爬或網路條件影響，建議改為監測主頁面 HTML，或更換 feed 來源。",
+                    retryable=False,
+                    http_status=e.http_status,
+                ) from e
             elif e.code == "timeout":
                 raise ScrapeFailure(
                     code="rss_fetch_failed_timeout",
@@ -1087,21 +1238,8 @@ def scrape_and_extract(
                     retryable=True,
                 ) from e
         else:
-            # URL 不是 RSS：遇到反爬/連線問題時嘗試瀏覽器模式 fallback
-            if e.code in ("http_403", "http_429", "timeout", "connection_error", "http_5xx", "http_error", "request_error"):
-                try:
-                    html, content_type = fetch_page_playwright(url)
-                    playwright_used = True
-                except ScrapeFailure as pe:
-                    raise ScrapeFailure(
-                        code=e.code,
-                        message=e.message,
-                        hint=f"{e.hint}；且瀏覽器模式也失敗（{pe.code}）。",
-                        retryable=e.retryable,
-                        http_status=e.http_status,
-                    ) from e
-            else:
-                raise e
+            # URL 不是 RSS：resilient 流程已包含 fallback，直接拋回。
+            raise e
 
     # fetch 成功：先依「內容像 feed」或「URL 像 feed endpoint」嘗試 RSS／Atom；
     # 若僅 URL 像 feed 但正文為 HTML／解析失敗，改走下方一般網頁流程（自動區分）。
