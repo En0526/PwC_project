@@ -195,11 +195,11 @@ def get_presets() -> list[Preset]:
         ),
         Preset(
             id="mentor-oecd-global-minimum-tax",
-            name="OECD Global Minimum Tax",
+            name="OECD Global Minimum Tax（Latest insights + Related publications）",
             url="https://www.oecd.org/en/topics/global-minimum-tax.html",
             frequency="業師提供",
-            check_interval_minutes=30,
-            watch_description="追蹤全球最低稅負制最新進展，包含 Pillar Two、XML 數據交換格式及相關申報指南。",
+            check_interval_minutes=360,
+            watch_description="本站為 OECD 議題頁（需瀏覽器渲染）。系統自動只截取「Latest insights」「Related publications」兩區（不含 Related events）。請留意是否有新 Announcement／Press release／Report 標題或日期更新。",
         ),
         Preset(
             id="mentor-bingo-bingo",

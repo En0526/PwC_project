@@ -50,6 +50,11 @@ def extract_known_section_snapshot(
     if host.endswith("mops.twse.com.tw") and "t05sr01_1" in (parsed.path or ""):
         return extract_mops_snapshot(url=url, html=html, full_text=full_text)
 
+    if host.endswith("oecd.org") and "/topics/" in (parsed.path or ""):
+        return extract_oecd_topics_insights_and_publications_snapshot(
+            url=url, full_text=full_text
+        )
+
     return None
 
 
@@ -359,6 +364,48 @@ def _extract_mops_total_records(full_text: str) -> str:
     """Extract total record count from MOPS page."""
     match = re.search(r"(?:共|總計|共計)\s*(?:有)?\s*([\d,]+)\s*(?:筆|項)", full_text or "")
     return match.group(1).replace(",", "") if match else ""
+
+
+def extract_oecd_topics_insights_and_publications_snapshot(
+    *,
+    url: str,
+    full_text: str,
+) -> SectionSnapshot | None:
+    """
+    OECD /en/topics/... pages: «Latest insights» through «Related publications»
+    (stop before «Related events»).
+    """
+    ft = (full_text or "").strip()
+    if not ft:
+        return None
+    start_marker = "Latest insights"
+    end_marker = "Related events"
+    i = ft.find(start_marker)
+    if i < 0:
+        return None
+    j = ft.find(end_marker, i + len(start_marker))
+    if j < 0:
+        block = ft[i:].strip()
+    else:
+        block = ft[i:j].strip()
+
+    if len(block) < 40 or "Related publications" not in block:
+        return None
+
+    lines = [
+        "[站點] OECD Topics",
+        "[區塊] Latest insights + Related publications",
+        f"[來源] {url}",
+        "",
+        block,
+    ]
+    return SectionSnapshot(
+        site_name="OECD",
+        section_name="議題頁 > Latest insights & Related publications",
+        source_url=url,
+        text="\n".join(lines),
+        confidence=0.94,
+    )
 
 
 def _clean_text(text: str) -> str:
