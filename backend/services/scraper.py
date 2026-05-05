@@ -48,6 +48,11 @@ from backend.services.bingo_monitor_agent import (
     extract_bingo_bingo_structured,
     bingo_bingo_snapshot_text,
 )
+from backend.services.oecd_beps_monitor_agent import (
+    is_oecd_beps_url,
+    extract_oecd_beps_structured,
+    oecd_beps_snapshot_text,
+)
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 TAIWAN_TZ = timezone(timedelta(hours=8))
@@ -988,6 +993,19 @@ def scrape_and_extract(
             snapshot = ntbna_snapshot_text(structured)
             h = content_hash(snapshot)
             return snapshot, h, {"status": "ok", "source": "ntbna_agent", "confidence": 0.95, "hint": ""}
+        except ScrapeFailure:
+            raise
+        except Exception:
+            pass  # 解析失敗時 fallback 到一般流程
+
+    # OECD BEPS 主題頁面（Latest insights + Related publications）- JS 動態頁面，需 Playwright
+    if is_oecd_beps_url(url):
+        try:
+            html_raw, _ = fetch_page_playwright(url, timeout=30)
+            structured = extract_oecd_beps_structured(html_raw, url)
+            snapshot = oecd_beps_snapshot_text(structured)
+            h = content_hash(snapshot)
+            return snapshot, h, {"status": "ok", "source": "oecd_beps_agent", "confidence": 0.94, "hint": ""}
         except ScrapeFailure:
             raise
         except Exception:

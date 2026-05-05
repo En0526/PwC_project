@@ -17,6 +17,8 @@ from backend.services.mops_monitor_agent import is_mops_realtime_url
 from backend.services.mops_diff_agent import generate_mops_diff_report
 from backend.services.bingo_monitor_agent import is_bingo_bingo_url
 from backend.services.bingo_diff_agent import generate_bingo_diff_report
+from backend.services.oecd_beps_monitor_agent import is_oecd_beps_url
+from backend.services.oecd_beps_diff_agent import generate_oecd_beps_diff_report
 
 try:
     import google.generativeai as genai
@@ -53,6 +55,16 @@ def generate_change_report(
         )
         if bingo_report:
             return bingo_report
+
+    if is_oecd_beps_url(url):
+        oecd_report = generate_oecd_beps_diff_report(
+            previous_snapshot=previous_snapshot,
+            current_snapshot=current_snapshot,
+            api_key=api_key,
+            model_name=model_name,
+        )
+        if oecd_report:
+            return oecd_report
 
     if is_ntbna_news_url(url):
         ntbna_report = generate_ntbna_diff_report(
