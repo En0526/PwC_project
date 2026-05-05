@@ -524,8 +524,10 @@
     }
 
     function checkOne(id, btn) {
-        btn.disabled = true;
-        btn.textContent = '檢查中…';
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = '檢查中…';
+        }
         var cardEl = btn && btn.closest ? btn.closest('.sub-card') : null;
         var controller = new AbortController();
         var timeoutId = setTimeout(function () { controller.abort(); }, 45000);
@@ -536,8 +538,10 @@
             })
             .then(function (data) {
                 clearTimeout(timeoutId);
-                btn.disabled = false;
-                btn.textContent = '立即檢查';
+                if (btn) {
+                    btn.disabled = false;
+                    btn.textContent = '立即檢查';
+                }
                 if (data && data.ok === false && data.error) {
                     var status = data.result_status || 'failed';
                     var hint = data.hint || '';
@@ -582,8 +586,10 @@
             })
             .catch(function (err) {
                 clearTimeout(timeoutId);
-                btn.disabled = false;
-                btn.textContent = '立即檢查';
+                if (btn) {
+                    btn.disabled = false;
+                    btn.textContent = '立即檢查';
+                }
                 if (err && err.name === 'AbortError') {
                     alert('立即檢查逾時（45 秒）。\n可能網站太慢或被擋，請稍後重試。');
                     return;
@@ -795,6 +801,73 @@
             subUrlField.addEventListener('change', scheduleUrlKindClassify);
         }
 
+        var btnPreview = qs('btn-preview-scrape');
+        var previewEl = qs('add-preview-result');
+        function runPreviewScrape() {
+            if (!btnPreview || !previewEl) return;
+            var url0 = (qs('sub-url').value || '').trim();
+            var watch0 = (qs('sub-watch').value || '').trim() || null;
+            if (!url0) {
+                alert('請先填寫網址。');
+                return;
+            }
+            btnPreview.disabled = true;
+            previewEl.style.display = 'block';
+            previewEl.className = 'add-preview-result meta-only';
+            previewEl.textContent = '擷取中…（動態網頁可能需數十秒，會自動使用瀏覽器渲染）';
+            fetch('/api/subscriptions/preview', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url: url0, watch_description: watch0 })
+            })
+                .then(function (r) {
+                    return r.json();
+                })
+                .then(function (data) {
+                    btnPreview.disabled = false;
+                    if (!data.ok) {
+                        previewEl.className = 'add-preview-result meta-only';
+                        var lines = ['【試擷取未成功】'];
+                        if (data.code) lines.push('狀態代碼：' + data.code);
+                        if (data.error) lines.push(String(data.error));
+                        if (data.hint) lines.push('建議：' + data.hint);
+                        if (data.gemini_enabled === false) {
+                            lines.push('未偵測到 GEMINI_API_KEY：新網站若無專用規則，多半只能比對整頁文字。');
+                        }
+                        previewEl.textContent = lines.join('\n');
+                        return;
+                    }
+                    var diag = data.diagnostic || {};
+                    var head =
+                        '【試擷取成功】\n' +
+                        '內容長度：' +
+                        (data.content_length || 0) +
+                        ' 字元\n雜湊前綴：' +
+                        String(data.content_hash || '').slice(0, 16) +
+                        '…\n擷取來源：' +
+                        (diag.source || '?') +
+                        (diag.section ? ' / 區塊：' + diag.section : '') +
+                        (diag.site ? ' / 站點：' + diag.site : '') +
+                        '\n信心度：' +
+                        (diag.confidence != null ? diag.confidence : '—') +
+                        '\n' +
+                        (data.gemini_enabled ? '（目前可使用 Gemini 協助區塊擷取）\n' : '（未設定 API Key：依專用規則或整頁擷取）\n') +
+                        '---\n\n';
+                    previewEl.className = 'add-preview-result';
+                    previewEl.textContent = head + (data.preview || '');
+                })
+                .catch(function () {
+                    btnPreview.disabled = false;
+                    previewEl.style.display = 'block';
+                    previewEl.className = 'add-preview-result meta-only';
+                    previewEl.textContent = '請求失敗，請確認已登入且後端（python app.py）正在執行。';
+                });
+        }
+        if (btnPreview) {
+            btnPreview.addEventListener('click', runPreviewScrape);
+        }
+
         form.addEventListener('submit', function (e) {
         e.preventDefault();
         var url = document.getElementById('sub-url').value.trim();
@@ -813,7 +886,7 @@
             interval = intervalVal ? parseInt(intervalVal, 10) : 1440;
         }
         submitSubscription({ url: url, name: name, watch_description: watch, check_interval_minutes: interval })
-            .then(function () {
+            .then(function (data) {
                 alert('新增訂閱成功！');
                 document.getElementById('sub-url').value = '';
                 document.getElementById('sub-name').value = '';
@@ -822,7 +895,15 @@
                 if (intervalCustomInput) intervalCustomInput.value = '';
                 toggleCustomIntervalInput();
                 setUrlKindHint('', '');
+                var pv = qs('add-preview-result');
+                if (pv) {
+                    pv.style.display = 'none';
+                    pv.textContent = '';
+                }
                 loadSubscriptions();
+                if (data && data.id && confirm('要現在執行第一次檢查（建立本訂閱的基準快照）嗎？\n按取消則仍依排程稍後檢查。')) {
+                    checkOne(data.id, null);
+                }
             })
             .catch(function (err) {
                 if (err && err.message === '已取消新增') return;

@@ -11,6 +11,7 @@ from backend.services.change_agent import generate_change_report
 from backend.services.notification_report import build_notifications_pdf
 from backend.services.email_service import send_notifications_report_email
 from backend.scheduler import run_check_subscription
+from backend.services.scraper import ScrapeFailure, classify_subscription_url, scrape_and_extract
 
 CHECK_INTERVAL_OPTIONS = {
     60: "每小時",
@@ -120,6 +121,64 @@ def list_subscriptions():
             for s in subs
         ]
     })
+
+
+@subscriptions_bp.route("/url/classify", methods=["POST"])
+@login_required
+def classify_subscription_url_route():
+    """粗分 RSS / 網頁，供新增追蹤表單即時提示（與 dashboard 對應）。"""
+    data = request.get_json() or {}
+    url = (data.get("url") or "").strip()
+    result = classify_subscription_url(url)
+    return jsonify(result)
+
+
+PREVIEW_MAX_CHARS = 12000
+
+
+@subscriptions_bp.route("/preview", methods=["POST"])
+@login_required
+def preview_subscription_scrape():
+    """
+    試擷取：不寫入資料庫，跑一次 scrape_and_extract。
+    用於自訂網站 +「要觀看的區塊」時確認 Agent／AI 能鎖定內容。
+    """
+    data = request.get_json() or {}
+    url = (data.get("url") or "").strip()
+    watch_description = (data.get("watch_description") or "").strip() or None
+    if not url:
+        return jsonify({"ok": False, "error": "請提供網址"}), 400
+
+    gemini_key = (current_app.config.get("GEMINI_API_KEY") or "").strip()
+    use_gemini = bool(gemini_key)
+
+    try:
+        content_text, chash, meta = scrape_and_extract(
+            url,
+            watch_description,
+            use_gemini=use_gemini,
+            gemini_api_key=gemini_key,
+        )
+    except ScrapeFailure as e:
+        return jsonify({
+            "ok": False,
+            "error": str(e),
+            "code": e.code,
+            "hint": e.hint,
+            "retryable": getattr(e, "retryable", True),
+            "http_status": getattr(e, "http_status", None),
+            "gemini_enabled": use_gemini,
+        }), 200
+
+    preview = content_text if len(content_text) <= PREVIEW_MAX_CHARS else content_text[:PREVIEW_MAX_CHARS] + "\n…（已截斷，實際長度 " + str(len(content_text)) + " 字元）"
+    return jsonify({
+        "ok": True,
+        "content_hash": chash,
+        "content_length": len(content_text),
+        "preview": preview,
+        "diagnostic": meta,
+        "gemini_enabled": use_gemini,
+    }), 200
 
 
 @subscriptions_bp.route("", methods=["POST"])
