@@ -1097,6 +1097,10 @@
     toggleCustomIntervalInput();
     setInterval(loadSubscriptions, 10000);
     setInterval(loadNotifications, 30000);
+
+    // 確保 RSS 進階區塊預設收起（覆蓋瀏覽器記住的展開狀態）
+    const rssAdvanced = document.querySelector('details.add-rss-advanced');
+    if (rssAdvanced) rssAdvanced.removeAttribute('open');
     }
 
     if (document.readyState === 'loading') {
